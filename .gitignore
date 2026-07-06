@@ -20,3 +20,6 @@ HALT
 # OS
 .DS_Store
 Thumbs.db
+
+# Order journal (runtime money-path artifact, slices 4.5+)
+data/journal/
