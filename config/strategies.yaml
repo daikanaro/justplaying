@@ -1,0 +1,38 @@
+# Strategy parameters (BUILD_PLAN.md §3). Strategies emit target positions, never orders.
+# Parameter changes require the plateau rule (broad neighborhood improves, never a single cell)
+# and must be logged in the experiment log.
+s1_trend_breakout:
+  tf_h:                          # deployment candidate
+    enabled: true
+    symbols: [MES, M2K]
+    bar_timeframe: 1h
+    donchian_n: 55               # bars, exclusive of current bar
+    atr_stop_k: 3.0
+    atr_period: 20
+    entry_session_utc: {start: "13:30", end: "21:00"}   # entries only; exits/stops active 24h
+    allow_short: true            # short-side on/off comparison is a tracked experiment
+  tf_d:                          # research comparison only; M2K only (MES daily risk too large)
+    enabled: true
+    symbols: [M2K]
+    bar_timeframe: 1d
+    donchian_n: 55
+    atr_stop_k: 3.0
+    atr_period: 20
+    allow_short: true
+  research_grid:                 # plateau maps
+    donchian_n: [20, 40, 55, 80, 120]
+    atr_stop_k: [2.5, 3.0, 4.0]
+
+s2_mr_rsi2:
+  enabled: true
+  symbols: [M2K, MES]            # MES permitted only when ATR gate passes (risk.yaml)
+  bar_timeframe: 1d
+  rsi_period: 2
+  rsi_entry_below: 10.0
+  rsi_exit_above: 65.0
+  sma_filter_period: 200         # entry requires close > SMA(200)
+  hard_stop_atr_mult: 2.5        # x ATR(14) below entry; resting at broker; never widened
+  hard_stop_atr_period: 14
+  time_stop_bars: 5
+  long_only: true                # v1; scale-ins deliberately removed (tail multiplier)
+  fill_modes: [same_close, next_open]   # backtest reports BOTH; the WORSE governs decisions

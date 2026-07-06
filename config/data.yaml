@@ -1,0 +1,36 @@
+# Data-layer configuration (BUILD_PLAN.md §1 data plan; consumed by slice 4.1).
+ibkr:
+  history_years: 2               # hard IBKR limit: no data older than 2y past contract expiry
+  pacing:
+    max_requests_per_10min: 60
+    max_requests_per_2s_same_contract: 6
+  include_expired: true
+
+roll:
+  rule: volume                   # roll when next contract's 5-day volume exceeds front's
+  volume_lookback_days: 5
+  fallback_days_before_expiry: 5 # business days
+  adjustment: panama             # difference back-adjustment; NEVER ratio adjustment
+
+paths:
+  raw_dir: data/raw
+  curated_dir: data/curated
+  calendar_file: data/calendar/events.csv
+  baseline_rtt_file: data/baseline_rtt.json
+
+sources:
+  vix:
+    provider: cboe
+    url: https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv
+  deep_history:
+    provider: pending            # OWNER DECISION: databento vs firstrate (before 4.4 conclusions)
+    provisional_fallback: stooq  # free daily continuous series; daily-bar sanity ONLY;
+                                 # results older than the IBKR window are labeled PROVISIONAL
+  binance_funding:
+    base_url: https://fapi.binance.com   # public REST, read-only, no keys
+    symbol: BTCUSDT
+    start: "2020-01-01"
+
+qc:
+  outlier_sigma: 12.0            # flag >12-sigma bar-to-bar moves
+  criticals_block_promotion: true

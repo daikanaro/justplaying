@@ -1,0 +1,17 @@
+# HUMAN-EDITED ONLY. Claude Code must never modify this file (see CLAUDE.md).
+# Semantics: daily_loss_halt blocks new entries (exits still allowed).
+# kill_drawdown_hwm: cancel-all + flatten (reduce-only) + HALT flag file + alert;
+# engine refuses to start while flag exists; owner deletes flag to re-arm.
+mode: paper                     # "live" requires owner edit + restart + G5 signed
+per_trade_risk_default: 0.005   # fraction of equity risked to stop
+per_trade_risk_max: 0.01
+daily_loss_halt: -0.03          # new entries halted for the day
+kill_drawdown_hwm: -0.35        # from high-water mark: cancel all, flatten, disable; manual re-arm
+gross_notional_max_x_equity: 3.0
+max_contracts: {MES: 2, M2K: 6, MNQ: 0}
+instrument_whitelist: [MES, M2K]
+price_collar_pct: 0.01          # reject orders priced >1% from last mark
+mr_atr_gate_equity_pct: 0.025   # MR entry allowed only if k_stop*ATR*$pt <= 2.5% of equity
+vix_max_for_mr: 35
+event_blackout_min: 30          # no entries within ±30min of calendar events
+rearm: manual

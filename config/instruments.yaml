@@ -1,0 +1,38 @@
+# Instrument contract specs and cost-model constants (BUILD_PLAN.md §1).
+# Tick values MUST be verified against IBKR contract details at first connect (slice 4.1/4.5).
+# Cost constants are recalibrated from real paper fills in slice 4.7.
+instruments:
+  MES:
+    name: Micro E-mini S&P 500
+    exchange: CME
+    currency: USD
+    dollars_per_point: 5.0
+    tick_size: 0.25
+    tick_value: 1.25
+    commission_per_side: 0.80   # all-in: IBKR fixed 0.25 + exchange/NFA ~0.55
+    notes: primary trend; MR only when ATR gate open
+  M2K:
+    name: Micro E-mini Russell 2000
+    exchange: CME
+    currency: USD
+    dollars_per_point: 5.0
+    tick_size: 0.10
+    tick_value: 0.50
+    commission_per_side: 0.80
+    notes: smallest notional -> sizing resolution; primary MR
+  MNQ:
+    name: Micro E-mini Nasdaq-100
+    exchange: CME
+    currency: USD
+    dollars_per_point: 2.0
+    tick_size: 0.25
+    tick_value: 0.50
+    commission_per_side: 0.80
+    notes: NOT whitelisted in v1; earned later
+
+slippage:
+  # Baseline slippage in ticks per side for market orders, by session.
+  rth_ticks_per_side: 1        # regular trading hours
+  eth_ticks_per_side: 2        # overnight (ETH) or fast tape
+  # Validation must additionally run x2 and x3 stress multipliers (mandatory).
+  stress_multipliers: [1, 2, 3]
