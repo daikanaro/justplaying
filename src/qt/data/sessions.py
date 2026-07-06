@@ -105,6 +105,20 @@ def is_open(ts_utc: datetime) -> bool:
     return t < _HALT_START or t >= _HALT_END
 
 
+_RTH_START = time(8, 30)  # US equity cash session, exchange (Chicago) time
+_RTH_END = time(15, 0)
+
+
+def is_rth(ts_utc: datetime) -> bool:
+    """True during the US equity cash session (08:30-15:00 Chicago, Mon-Fri).
+    The cost model charges 1 tick slippage here, 2 ticks elsewhere (§1)."""
+    if ts_utc.tzinfo is None:
+        msg = "is_rth requires a timezone-aware UTC datetime"
+        raise ValueError(msg)
+    local = ts_utc.astimezone(CHICAGO)
+    return local.weekday() < _SATURDAY and _RTH_START <= local.time() < _RTH_END
+
+
 def expected_hourly_starts(start: date, end: date) -> list[datetime]:
     """UTC start times of every hourly bar the session template expects in
     [start, end] (dates inclusive, interpreted as UTC calendar days)."""
