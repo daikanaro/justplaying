@@ -45,6 +45,10 @@ class EngineConfig:
     initial_cash_cents: int
     latency_bars: int = 1  # §4 latency mode: signal at T, fill at T+delta
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    # §3 S2 ONLY: fill target deltas at the SIGNAL bar's close instead of the
+    # next open. Explicitly lookahead-adjacent — the plan requires reporting
+    # BOTH modes and letting the WORSE govern. Never use for live decisions.
+    same_close_fills: bool = False
 
     def __post_init__(self) -> None:
         if self.latency_bars < 1:
@@ -147,7 +151,7 @@ class Engine:
             targets = self._strategy.on_bar(ctx)
             signal = SignalEvent(ts, dict(targets))
             signals.append(signal)
-            self._schedule_orders(index, signal)
+            fills.extend(self._schedule_orders(index, signal, bars_now))
 
             equity_curve.append((ts, self.portfolio.equity_cents))
         return BacktestResult(
@@ -229,7 +233,10 @@ class Engine:
                 self.stops.pop(symbol, None)
         return fills
 
-    def _schedule_orders(self, index: int, signal: SignalEvent) -> None:
+    def _schedule_orders(
+        self, index: int, signal: SignalEvent, bars_now: dict[str, Bar]
+    ) -> list[FillEvent]:
+        fills: list[FillEvent] = []
         for symbol, target in signal.targets.items():
             if symbol not in self._bars:
                 msg = f"strategy targeted unknown symbol {symbol!r}"
@@ -239,10 +246,23 @@ class Engine:
             if delta == 0:
                 continue
             event = OrderEvent(ts=signal.ts, symbol=symbol, quantity=delta, reason="target")
-            self._pending.append((index + self._config.latency_bars, event))
+            if self._config.same_close_fills:
+                side = Side.BUY if delta > 0 else Side.SELL
+                order = MarketOrder(symbol=symbol, side=side, quantity=abs(delta))
+                while order.remaining > 0:
+                    fill = self._execution.fill_market_at_close(
+                        order, bars_now[symbol], "target-same-close"
+                    )
+                    self._observe(fill.ts)
+                    self.portfolio.apply_fill(fill)
+                    fills.append(fill)
+                self._sync_stop_quantity(symbol)
+            else:
+                self._pending.append((index + self._config.latency_bars, event))
             current_dir = self.portfolio.quantity(symbol) + pending_qty + delta
             if current_dir == 0 or target == 0:
                 self.stops.pop(symbol, None)  # going flat: stop travels with the position
+        return fills
 
     def _sync_stop_quantity(self, symbol: str) -> None:
         """Keep the resting stop covering the whole position after fills."""

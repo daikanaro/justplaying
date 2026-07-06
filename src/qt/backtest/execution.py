@@ -60,6 +60,12 @@ class ExecutionSimulator:
         price = bar.open + order.side.sign * slip
         return self._make_fill(order, bar, price, reason)
 
+    def fill_market_at_close(self, order: MarketOrder, bar: Bar, reason: str) -> FillEvent:
+        """§3 S2 same-close mode (lookahead-adjacent): close ± adverse slippage."""
+        slip = self._costs.slippage_points(order.symbol, bar.ts)
+        price = bar.close + order.side.sign * slip
+        return self._make_fill(order, bar, price, reason)
+
     def try_fill_stop(self, order: StopOrder, bar: Bar, reason: str) -> FillEvent | None:
         """Resting stop against this bar; None if not triggered."""
         slip = self._costs.slippage_points(order.symbol, bar.ts)
