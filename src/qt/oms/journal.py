@@ -29,6 +29,18 @@ class ReplayResult:
     truncated_tail: bool  # a corrupt final line was dropped (crash mid-write)
 
 
+@dataclass(frozen=True)
+class FillRecord:
+    """One priced fill increment, as journaled (for nightly reconciliation)."""
+
+    ts_utc: str
+    client_order_id: str
+    symbol: str
+    side: str  # "buy" | "sell"
+    quantity: int  # unsigned increment
+    price: float
+
+
 class OrderJournal:
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -93,6 +105,58 @@ class OrderJournal:
 
     def known_ids(self) -> set[str]:
         return set(self.replay().orders)
+
+    def fills(self) -> list[FillRecord]:
+        """Priced fill increments in journal order. Validates via replay()
+        first so a structurally broken journal cannot feed reconciliation."""
+        replay = self.replay()
+        sides = {
+            order_id: ("buy" if side > 0 else "sell")
+            for order_id, side in self._sides_from_intents().items()
+        }
+        out: list[FillRecord] = []
+        for record in self._records():
+            if record.get("kind") != "transition":
+                continue
+            fill_quantity = int(record.get("fill_quantity", 0))
+            if fill_quantity == 0 or record.get("fill_price") is None:
+                continue
+            order_id = str(record["client_order_id"])
+            order = replay.orders.get(order_id)
+            if order is None:
+                continue  # replay() already policed unknown ids; belt and braces
+            out.append(
+                FillRecord(
+                    ts_utc=str(record.get("ts_utc", "")),
+                    client_order_id=order_id,
+                    symbol=order.symbol,
+                    side=sides.get(order_id, "buy"),
+                    quantity=fill_quantity,
+                    price=float(record["fill_price"]),
+                )
+            )
+        return out
+
+    def _records(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        lines = self._path.read_text(encoding="utf-8").splitlines()
+        for lineno, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                if lineno == len(lines):
+                    break  # tolerated crash tail (replay() reports it)
+                raise
+        return out
+
+    def _sides_from_intents(self) -> dict[str, int]:
+        return {
+            str(r["client_order_id"]): (1 if r.get("side") == "buy" else -1)
+            for r in self._records()
+            if r.get("kind") == "intent"
+        }
 
     def replay(self) -> ReplayResult:
         """Rebuild order + position state from the journal, via the SAME state
