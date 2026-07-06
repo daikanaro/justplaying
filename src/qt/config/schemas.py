@@ -11,14 +11,20 @@ Design rules:
 
 from __future__ import annotations
 
+import math
 import re
+from itertools import pairwise
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,6}$")
+# fullmatch everywhere: re.match + "$" tolerates a trailing newline ("MES\n" would pass).
+SYMBOL_RE = re.compile(r"[A-Z0-9]{1,6}")
 
-_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_TIME_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+_GRID_MIN_DONCHIAN = 2
+_TICK_TOLERANCE = 1e-9
 
 
 class StrictModel(BaseModel):
@@ -28,8 +34,8 @@ class StrictModel(BaseModel):
 
 
 def _check_symbol(symbol: str) -> str:
-    if not SYMBOL_RE.match(symbol):
-        msg = f"invalid symbol {symbol!r}: must match {SYMBOL_RE.pattern}"
+    if not SYMBOL_RE.fullmatch(symbol):
+        msg = f"invalid symbol {symbol!r}: must fully match {SYMBOL_RE.pattern}"
         raise ValueError(msg)
     return symbol
 
@@ -43,16 +49,18 @@ class RiskConfig(StrictModel):
     """Schema for config/risk.yaml (§2). The file itself is human-edited only."""
 
     mode: Literal["paper", "live"]
-    per_trade_risk_default: float = Field(gt=0.0, le=0.05)
-    per_trade_risk_max: float = Field(gt=0.0, le=0.05)
-    daily_loss_halt: float = Field(lt=0.0, ge=-1.0)
-    kill_drawdown_hwm: float = Field(lt=0.0, ge=-1.0)
-    gross_notional_max_x_equity: float = Field(gt=0.0)
+    # allow_inf_nan=False on every float: an `.inf` (or a "1e999" typo pydantic coerces
+    # to inf) must never silently neutralize a risk limit.
+    per_trade_risk_default: float = Field(gt=0.0, le=0.05, allow_inf_nan=False)
+    per_trade_risk_max: float = Field(gt=0.0, le=0.05, allow_inf_nan=False)
+    daily_loss_halt: float = Field(lt=0.0, ge=-1.0, allow_inf_nan=False)
+    kill_drawdown_hwm: float = Field(lt=0.0, ge=-1.0, allow_inf_nan=False)
+    gross_notional_max_x_equity: float = Field(gt=0.0, allow_inf_nan=False)
     max_contracts: dict[str, int]
     instrument_whitelist: list[str]
-    price_collar_pct: float = Field(gt=0.0, lt=1.0)
-    mr_atr_gate_equity_pct: float = Field(gt=0.0, lt=1.0)
-    vix_max_for_mr: float = Field(gt=0.0)
+    price_collar_pct: float = Field(gt=0.0, lt=1.0, allow_inf_nan=False)
+    mr_atr_gate_equity_pct: float = Field(gt=0.0, lt=1.0, allow_inf_nan=False)
+    vix_max_for_mr: float = Field(gt=0.0, allow_inf_nan=False)
     event_blackout_min: int = Field(ge=0)
     rearm: Literal["manual"]  # v1: manual re-arm only (§2)
 
@@ -106,16 +114,16 @@ class InstrumentSpec(StrictModel):
     name: str = Field(min_length=1)
     exchange: str = Field(min_length=1)
     currency: Literal["USD"]  # v1 is USD-only; widen deliberately, not accidentally
-    dollars_per_point: float = Field(gt=0.0)
-    tick_size: float = Field(gt=0.0)
-    tick_value: float = Field(gt=0.0)
-    commission_per_side: float = Field(ge=0.0)
+    dollars_per_point: float = Field(gt=0.0, allow_inf_nan=False)
+    tick_size: float = Field(gt=0.0, allow_inf_nan=False)
+    tick_value: float = Field(gt=0.0, allow_inf_nan=False)
+    commission_per_side: float = Field(ge=0.0, allow_inf_nan=False)
     notes: str = ""
 
     @model_validator(mode="after")
     def _tick_consistency(self) -> InstrumentSpec:
         implied = self.dollars_per_point * self.tick_size
-        if abs(implied - self.tick_value) > 1e-9:
+        if abs(implied - self.tick_value) > _TICK_TOLERANCE:
             msg = (
                 f"tick_value {self.tick_value} inconsistent: dollars_per_point "
                 f"({self.dollars_per_point}) x tick_size ({self.tick_size}) = {implied}"
@@ -139,10 +147,13 @@ class SlippageConfig(StrictModel):
                 f"({self.rth_ticks_per_side}): overnight slippage cannot be better than RTH"
             )
             raise ValueError(msg)
-        if sorted(self.stress_multipliers) != self.stress_multipliers or any(
-            m < 1 for m in self.stress_multipliers
+        if any(m < 1 for m in self.stress_multipliers) or any(
+            a >= b for a, b in pairwise(self.stress_multipliers)
         ):
-            msg = f"stress_multipliers must be ascending and >= 1, got {self.stress_multipliers}"
+            msg = (
+                f"stress_multipliers must be strictly ascending and >= 1 "
+                f"(no duplicates), got {self.stress_multipliers}"
+            )
             raise ValueError(msg)
         required = {1, 2, 3}  # x1/x2/x3 stress runs are mandatory in validation (§1)
         if not required.issubset(set(self.stress_multipliers)):
@@ -178,7 +189,7 @@ class SessionWindow(StrictModel):
     @model_validator(mode="after")
     def _valid_times(self) -> SessionWindow:
         for label, value in (("start", self.start), ("end", self.end)):
-            if not _TIME_RE.match(value):
+            if not _TIME_RE.fullmatch(value):
                 msg = f"session {label} {value!r} is not HH:MM 24h UTC"
                 raise ValueError(msg)
         if self.start == self.end:
@@ -194,7 +205,7 @@ class TrendBreakoutParams(StrictModel):
     symbols: list[str] = Field(min_length=1)
     bar_timeframe: Literal["1h", "1d"]
     donchian_n: int = Field(ge=2)
-    atr_stop_k: float = Field(gt=0.0)
+    atr_stop_k: float = Field(gt=0.0, allow_inf_nan=False)
     atr_period: int = Field(ge=2)
     entry_session_utc: SessionWindow | None = None
     allow_short: bool = True
@@ -217,11 +228,21 @@ class TrendResearchGrid(StrictModel):
 
     @model_validator(mode="after")
     def _invariants(self) -> TrendResearchGrid:
-        if sorted(self.donchian_n) != self.donchian_n or any(n < 2 for n in self.donchian_n):
-            msg = f"donchian_n grid must be ascending and >= 2, got {self.donchian_n}"
+        if any(n < _GRID_MIN_DONCHIAN for n in self.donchian_n) or any(
+            a >= b for a, b in pairwise(self.donchian_n)
+        ):
+            msg = (
+                f"donchian_n grid must be strictly ascending (no duplicates) and "
+                f">= {_GRID_MIN_DONCHIAN}, got {self.donchian_n}"
+            )
             raise ValueError(msg)
-        if sorted(self.atr_stop_k) != self.atr_stop_k or any(k <= 0 for k in self.atr_stop_k):
-            msg = f"atr_stop_k grid must be ascending and > 0, got {self.atr_stop_k}"
+        if any(not math.isfinite(k) or k <= 0 for k in self.atr_stop_k) or any(
+            a >= b for a, b in pairwise(self.atr_stop_k)
+        ):
+            msg = (
+                f"atr_stop_k grid must be strictly ascending (no duplicates), finite, "
+                f"and > 0, got {self.atr_stop_k}"
+            )
             raise ValueError(msg)
         return self
 
@@ -257,10 +278,10 @@ class MrRsi2Config(StrictModel):
     symbols: list[str] = Field(min_length=1)
     bar_timeframe: Literal["1d"]
     rsi_period: int = Field(ge=2)
-    rsi_entry_below: float = Field(gt=0.0, lt=100.0)
-    rsi_exit_above: float = Field(gt=0.0, lt=100.0)
+    rsi_entry_below: float = Field(gt=0.0, lt=100.0, allow_inf_nan=False)
+    rsi_exit_above: float = Field(gt=0.0, lt=100.0, allow_inf_nan=False)
     sma_filter_period: int = Field(ge=2)
-    hard_stop_atr_mult: float = Field(gt=0.0)
+    hard_stop_atr_mult: float = Field(gt=0.0, allow_inf_nan=False)
     hard_stop_atr_period: int = Field(ge=2)
     time_stop_bars: int = Field(ge=1)
     long_only: Literal[True]  # v1: long-only is a locked decision (§3)
@@ -279,10 +300,10 @@ class MrRsi2Config(StrictModel):
                 f"rsi_exit_above ({self.rsi_exit_above})"
             )
             raise ValueError(msg)
-        if set(self.fill_modes) != {"same_close", "next_open"}:
+        if sorted(self.fill_modes) != ["next_open", "same_close"]:
             msg = (
-                "fill_modes must contain exactly {'same_close', 'next_open'}: the backtest "
-                f"reports BOTH and the worse governs (§3), got {self.fill_modes}"
+                "fill_modes must contain exactly {'same_close', 'next_open'} once each: the "
+                f"backtest reports BOTH and the worse governs (§3), got {self.fill_modes}"
             )
             raise ValueError(msg)
         return self
@@ -355,7 +376,7 @@ class BinanceFundingSource(StrictModel):
 
     @model_validator(mode="after")
     def _symbol(self) -> BinanceFundingSource:
-        if not re.match(r"^[A-Z0-9]{5,12}$", self.symbol):
+        if not re.fullmatch(r"[A-Z0-9]{5,12}", self.symbol):
             msg = f"invalid Binance symbol {self.symbol!r}"
             raise ValueError(msg)
         return self
@@ -368,7 +389,7 @@ class DataSources(StrictModel):
 
 
 class QcConfig(StrictModel):
-    outlier_sigma: float = Field(gt=0.0)
+    outlier_sigma: float = Field(gt=0.0, allow_inf_nan=False)
     criticals_block_promotion: Literal[True]  # criticals always block promotion (§4.1)
 
 

@@ -8,6 +8,7 @@ message. Nothing on the money path may start with a half-valid config.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ValidationError
@@ -32,13 +33,38 @@ class ConfigError(Exception):
     """A config file is missing, unparseable, or invalid. Fatal at startup."""
 
 
+class _StrictKeyLoader(yaml.SafeLoader):
+    """SafeLoader that rejects duplicate mapping keys.
+
+    PyYAML's default is silently last-wins, so a risk limit accidentally repeated
+    at the bottom of risk.yaml would override the real one without a trace.
+    """
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        seen: set[Any] = set()
+        for key_node, _value_node in node.value:
+            key = self.construct_object(key_node, deep=True)
+            if isinstance(key, (str, int, float, bool)):  # unhashable keys fail in the base class
+                if key in seen:
+                    raise yaml.constructor.ConstructorError(
+                        None, None, f"duplicate mapping key {key!r}", key_node.start_mark
+                    )
+                seen.add(key)
+        return super().construct_mapping(node, deep)
+
+
 def load_config[M: BaseModel](path: Path, model: type[M]) -> M:
     """Load one YAML file and validate it against ``model``. Fail fast on any error."""
     if not path.is_file():
         msg = f"config file not found: {path}"
         raise ConfigError(msg)
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        msg = f"cannot read config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    try:
+        raw = yaml.load(text, Loader=_StrictKeyLoader)
     except yaml.YAMLError as exc:
         msg = f"invalid YAML in {path}: {exc}"
         raise ConfigError(msg) from exc

@@ -1,9 +1,10 @@
 {
-  "generated_utc": "2026-07-06T07:44:28+00:00",
+  "generated_utc": "2026-07-06T11:18:06+00:00",
   "hostname": "vm",
   "platform": "Linux-6.18.5-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "note": "cloud build container smoke test - NOT the production baseline; re-run from the production Windows box (see docs/windows_ops.md)",
+  "measurement": "tcp_handshake_ms to a pre-resolved address (DNS excluded)",
   "samples_per_endpoint": 100,
   "timeout_s": 5.0,
   "results": [
@@ -12,15 +13,16 @@
       "samples": 100,
       "ok": 100,
       "failed": 0,
+      "address": "23.195.81.154",
       "stats": {
-        "min_ms": 2.004,
-        "median_ms": 2.535,
-        "mean_ms": 5.483,
-        "p95_ms": 15.892,
-        "p99_ms": 31.369,
-        "max_ms": 111.342,
-        "jitter_stddev_ms": 12.016,
-        "jitter_iqr_ms": 0.458
+        "min_ms": 0.187,
+        "median_ms": 0.271,
+        "mean_ms": 0.279,
+        "p95_ms": 0.378,
+        "p99_ms": 0.503,
+        "max_ms": 0.562,
+        "jitter_stddev_ms": 0.065,
+        "jitter_iqr_ms": 0.063
       }
     },
     {
@@ -28,15 +30,16 @@
       "samples": 100,
       "ok": 100,
       "failed": 0,
+      "address": "18.160.135.186",
       "stats": {
-        "min_ms": 1.836,
-        "median_ms": 2.492,
-        "mean_ms": 8.408,
-        "p95_ms": 47.997,
-        "p99_ms": 63.205,
-        "max_ms": 64.345,
-        "jitter_stddev_ms": 14.591,
-        "jitter_iqr_ms": 0.61
+        "min_ms": 0.202,
+        "median_ms": 0.265,
+        "mean_ms": 0.305,
+        "p95_ms": 0.514,
+        "p99_ms": 0.577,
+        "max_ms": 0.612,
+        "jitter_stddev_ms": 0.099,
+        "jitter_iqr_ms": 0.09
       }
     },
     {
@@ -44,15 +47,16 @@
       "samples": 100,
       "ok": 100,
       "failed": 0,
+      "address": "99.84.118.2",
       "stats": {
-        "min_ms": 2.051,
-        "median_ms": 2.551,
-        "mean_ms": 7.593,
-        "p95_ms": 43.138,
-        "p99_ms": 65.912,
-        "max_ms": 70.374,
-        "jitter_stddev_ms": 13.713,
-        "jitter_iqr_ms": 0.436
+        "min_ms": 0.223,
+        "median_ms": 0.342,
+        "mean_ms": 0.357,
+        "p95_ms": 0.505,
+        "p99_ms": 0.573,
+        "max_ms": 0.626,
+        "jitter_stddev_ms": 0.085,
+        "jitter_iqr_ms": 0.126
       }
     }
   ]

@@ -24,7 +24,7 @@ Windows' default sync cadence is far too loose. As Administrator:
 ```bat
 w32tm /config /manualpeerlist:"time.windows.com,0x9 pool.ntp.org,0x9" /syncfromflags:manual /update
 net stop w32time && net start w32time
-w32tm /resync /force
+w32tm /resync /rediscover
 ```
 
 Verify drift (target: well under 1 s offset):
@@ -40,8 +40,10 @@ treat it as an incident: halt new entries until resynced.
 ## IB Gateway auto-restart
 
 - IB Gateway restarts itself daily (Configure → Settings → Lock and Exit → *Auto restart*).
-  Set the restart time **inside the maintenance window and outside our entry session**
-  (e.g. 23:30 ET). The engine must treat the resulting disconnect as expected: reconnect,
+  Set the restart time **inside IBKR's North-America server reset window (23:45–00:45 ET)
+  and outside our entry session** (e.g. 00:00 ET), so the nightly Gateway restart and the
+  broker-side reset produce one disconnect cycle, not two.
+  The engine must treat the resulting disconnect as expected: reconnect,
   run full reconciliation vs journal (slice 4.5), resume.
 - Auto-restart works ~6 days; the weekly full authentication (Sunday) still requires either
   2FA via IBKR Mobile or the "Seamless re-authentication" setting where available. Document

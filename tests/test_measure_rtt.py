@@ -55,7 +55,23 @@ def test_parse_endpoint_valid() -> None:
     assert measure_rtt.parse_endpoint("api.ibkr.com:443") == ("api.ibkr.com", 443)
 
 
-@pytest.mark.parametrize("bad", ["no-port", ":443", "host:", "host:abc", "host:0", "host:99999"])
+def test_parse_endpoint_bracketed_ipv6() -> None:
+    assert measure_rtt.parse_endpoint("[2001:db8::1]:443") == ("2001:db8::1", 443)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "no-port",
+        ":443",
+        "host:",
+        "host:abc",
+        "host:0",
+        "host:99999",
+        "https://api.ibkr.com:443",
+        "[]:443",
+    ],
+)
 def test_parse_endpoint_invalid(bad: str) -> None:
     with pytest.raises(argparse.ArgumentTypeError):
         measure_rtt.parse_endpoint(bad)
@@ -98,8 +114,21 @@ def test_measure_endpoint_success(local_listener: tuple[str, int]) -> None:
     result = measure_rtt.measure_endpoint(host, port, samples=5, timeout_s=2.0, delay_s=0.0)
     assert result["ok"] == 5
     assert result["failed"] == 0
+    assert result["address"] == "127.0.0.1"
     assert result["stats"]["median_ms"] >= 0.0
     assert "failure_reasons" not in result
+
+
+def test_measure_endpoint_resolution_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(host: str, port: int) -> tuple[socket.AddressFamily, object, str]:
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(measure_rtt, "resolve_endpoint", boom)
+    result = measure_rtt.measure_endpoint("nowhere.invalid", 443, 5, 1.0, 0.0)
+    assert result["ok"] == 0
+    assert result["failed"] == 5
+    assert "address" not in result
+    assert "resolution failed" in result["failure_reasons"][0]
 
 
 def test_measure_endpoint_refused() -> None:
@@ -166,3 +195,34 @@ def test_main_all_failures_returns_nonzero(tmp_path: Path) -> None:
     )
     assert code == 1
     assert out.exists()  # the report is still written; failures are recorded facts
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--samples", "0"],
+        ["--timeout", "0"],
+        ["--timeout", "-1"],
+        ["--delay", "-0.5"],
+    ],
+)
+def test_main_rejects_invalid_numeric_args(argv: list[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        measure_rtt.main(argv)
+    assert excinfo.value.code == 2  # argparse usage error, not a mid-run crash
+
+
+# ---------------------------------------------------------------------------
+# The shipped baseline artifact (slice 4.0 acceptance: file exists with stats)
+# ---------------------------------------------------------------------------
+
+
+def test_shipped_baseline_has_required_stats() -> None:
+    baseline = Path(__file__).resolve().parent.parent / "data" / "baseline_rtt.json"
+    report = json.loads(baseline.read_text(encoding="utf-8"))
+    assert report["results"], "baseline has no endpoint results"
+    assert any(r["ok"] > 0 for r in report["results"]), "no endpoint has a successful sample"
+    for r in report["results"]:
+        if r["ok"] > 0:
+            for key in ("median_ms", "p95_ms", "jitter_stddev_ms", "jitter_iqr_ms"):
+                assert key in r["stats"], f"{r['endpoint']} missing {key}"

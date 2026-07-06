@@ -1,7 +1,12 @@
 """Measure TCP connect-time baselines to broker/exchange endpoints (slice 4.0).
 
-Takes N raw TCP connect samples per endpoint and writes summary statistics
+Takes N TCP handshake samples per endpoint and writes summary statistics
 (median, p95, jitter, ...) plus environment metadata to a JSON file.
+
+What is measured: each endpoint's hostname is resolved ONCE (getaddrinfo, first
+address wins) and every sample then times a bare socket connect() to that fixed
+address — so the numbers are pure TCP handshake RTT, excluding DNS lookups and
+multi-address fallback. The resolved address is recorded in the report.
 
 Stdlib-only on purpose: the numbers only mean something when measured from the
 production machine (the owner's box in Kazakhstan), which may not have the
@@ -38,28 +43,49 @@ DEFAULT_DELAY_S = 0.05
 DEFAULT_OUTPUT = "data/baseline_rtt.json"
 
 
+MAX_PORT = 65535
+
+
 def parse_endpoint(value: str) -> tuple[str, int]:
+    if "://" in value:
+        msg = f"endpoint {value!r} must be host:port, not a URL"
+        raise argparse.ArgumentTypeError(msg)
     host, sep, port_str = value.rpartition(":")
     if not sep or not host:
         msg = f"endpoint {value!r} is not host:port"
         raise argparse.ArgumentTypeError(msg)
+    if host.startswith("[") and host.endswith("]"):  # bracketed IPv6 literal
+        host = host[1:-1]
+        if not host:
+            msg = f"endpoint {value!r} has an empty IPv6 host"
+            raise argparse.ArgumentTypeError(msg)
     try:
         port = int(port_str)
     except ValueError as exc:
         msg = f"endpoint {value!r} has non-integer port"
         raise argparse.ArgumentTypeError(msg) from exc
-    if not 0 < port < 65536:
+    if not 0 < port <= MAX_PORT:
         msg = f"endpoint {value!r} port out of range"
         raise argparse.ArgumentTypeError(msg)
     return host, port
 
 
-def sample_connect_ms(host: str, port: int, timeout_s: float) -> float:
-    """One TCP connect; returns elapsed milliseconds. Raises OSError on failure."""
-    start = time.perf_counter()
-    with socket.create_connection((host, port), timeout=timeout_s):
-        pass
-    return (time.perf_counter() - start) * 1000.0
+def resolve_endpoint(host: str, port: int) -> tuple[socket.AddressFamily, Any, str]:
+    """Resolve once; returns (family, sockaddr, printable address). Raises OSError."""
+    family, _type, _proto, _canon, sockaddr = socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM
+    )[0]
+    return family, sockaddr, str(sockaddr[0])
+
+
+def sample_connect_ms(family: socket.AddressFamily, sockaddr: Any, timeout_s: float) -> float:
+    """One TCP handshake to a pre-resolved address; returns elapsed milliseconds.
+    Raises OSError on failure."""
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout_s)
+        start = time.perf_counter()
+        sock.connect(sockaddr)
+        return (time.perf_counter() - start) * 1000.0
 
 
 def percentile(sorted_ms: list[float], pct: float) -> float:
@@ -92,21 +118,29 @@ def summarize(samples_ms: list[float]) -> dict[str, float]:
 def measure_endpoint(
     host: str, port: int, samples: int, timeout_s: float, delay_s: float
 ) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "endpoint": f"{host}:{port}",
+        "samples": samples,
+        "ok": 0,
+        "failed": samples,
+    }
+    try:
+        family, sockaddr, address = resolve_endpoint(host, port)
+    except OSError as exc:
+        result["failure_reasons"] = [f"resolution failed: {type(exc).__name__}: {exc}"]
+        return result
+    result["address"] = address
     ok_ms: list[float] = []
     failures: list[str] = []
     for i in range(samples):
         if i:
             time.sleep(delay_s)
         try:
-            ok_ms.append(sample_connect_ms(host, port, timeout_s))
+            ok_ms.append(sample_connect_ms(family, sockaddr, timeout_s))
         except OSError as exc:
             failures.append(f"{type(exc).__name__}: {exc}")
-    result: dict[str, Any] = {
-        "endpoint": f"{host}:{port}",
-        "samples": samples,
-        "ok": len(ok_ms),
-        "failed": len(failures),
-    }
+    result["ok"] = len(ok_ms)
+    result["failed"] = len(failures)
     if ok_ms:
         result["stats"] = summarize(ok_ms)
     if failures:
@@ -136,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.samples < 1:
         parser.error("--samples must be >= 1")
+    if args.timeout <= 0:
+        parser.error("--timeout must be > 0 (0 would put sockets in non-blocking mode)")
+    if args.delay < 0:
+        parser.error("--delay must be >= 0")
 
     endpoints: list[tuple[str, int]] = args.endpoints or [
         parse_endpoint(e) for e in DEFAULT_ENDPOINTS
@@ -152,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         "platform": platform.platform(),
         "python": platform.python_version(),
         "note": args.note,
+        "measurement": "tcp_handshake_ms to a pre-resolved address (DNS excluded)",
         "samples_per_endpoint": args.samples,
         "timeout_s": args.timeout,
         "results": results,
