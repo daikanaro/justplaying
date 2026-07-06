@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+
+# Bulk market data never goes in git; curated outputs are reproducible from raw + code.
+data/raw/
+data/curated/
+
+# Runtime artifacts (journals, flags, logs — slices 4.5+)
+*.log
+HALT
+
+# OS
+.DS_Store
+Thumbs.db
