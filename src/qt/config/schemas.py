@@ -118,6 +118,7 @@ class InstrumentSpec(StrictModel):
     tick_size: float = Field(gt=0.0, allow_inf_nan=False)
     tick_value: float = Field(gt=0.0, allow_inf_nan=False)
     commission_per_side: float = Field(ge=0.0, allow_inf_nan=False)
+    maintenance_margin: float = Field(gt=0.0, allow_inf_nan=False)  # $/contract, broker-set
     notes: str = ""
 
     @model_validator(mode="after")

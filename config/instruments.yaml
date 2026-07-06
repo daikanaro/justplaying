@@ -10,6 +10,7 @@ instruments:
     tick_size: 0.25
     tick_value: 1.25
     commission_per_side: 0.80   # all-in: IBKR fixed 0.25 + exchange/NFA ~0.55
+    maintenance_margin: 2400.0  # $/contract; VERIFY against IBKR at first connect
     notes: primary trend; MR only when ATR gate open
   M2K:
     name: Micro E-mini Russell 2000
@@ -19,6 +20,7 @@ instruments:
     tick_size: 0.10
     tick_value: 0.50
     commission_per_side: 0.80
+    maintenance_margin: 750.0   # $/contract; VERIFY against IBKR at first connect
     notes: smallest notional -> sizing resolution; primary MR
   MNQ:
     name: Micro E-mini Nasdaq-100
@@ -28,6 +30,7 @@ instruments:
     tick_size: 0.25
     tick_value: 0.50
     commission_per_side: 0.80
+    maintenance_margin: 2300.0  # $/contract; VERIFY against IBKR at first connect
     notes: NOT whitelisted in v1; earned later
 
 slippage:
