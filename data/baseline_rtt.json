@@ -1,0 +1,59 @@
+{
+  "generated_utc": "2026-07-06T07:44:28+00:00",
+  "hostname": "vm",
+  "platform": "Linux-6.18.5-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "note": "cloud build container smoke test - NOT the production baseline; re-run from the production Windows box (see docs/windows_ops.md)",
+  "samples_per_endpoint": 100,
+  "timeout_s": 5.0,
+  "results": [
+    {
+      "endpoint": "api.ibkr.com:443",
+      "samples": 100,
+      "ok": 100,
+      "failed": 0,
+      "stats": {
+        "min_ms": 2.004,
+        "median_ms": 2.535,
+        "mean_ms": 5.483,
+        "p95_ms": 15.892,
+        "p99_ms": 31.369,
+        "max_ms": 111.342,
+        "jitter_stddev_ms": 12.016,
+        "jitter_iqr_ms": 0.458
+      }
+    },
+    {
+      "endpoint": "api.binance.com:443",
+      "samples": 100,
+      "ok": 100,
+      "failed": 0,
+      "stats": {
+        "min_ms": 1.836,
+        "median_ms": 2.492,
+        "mean_ms": 8.408,
+        "p95_ms": 47.997,
+        "p99_ms": 63.205,
+        "max_ms": 64.345,
+        "jitter_stddev_ms": 14.591,
+        "jitter_iqr_ms": 0.61
+      }
+    },
+    {
+      "endpoint": "fapi.binance.com:443",
+      "samples": 100,
+      "ok": 100,
+      "failed": 0,
+      "stats": {
+        "min_ms": 2.051,
+        "median_ms": 2.551,
+        "mean_ms": 7.593,
+        "p95_ms": 43.138,
+        "p99_ms": 65.912,
+        "max_ms": 70.374,
+        "jitter_stddev_ms": 13.713,
+        "jitter_iqr_ms": 0.436
+      }
+    }
+  ]
+}
