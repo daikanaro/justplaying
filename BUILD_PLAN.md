@@ -11,7 +11,7 @@ Claude Code executes slices 4.0 → 4.7 in order, one at a time. CLAUDE.md rules
 - [ ] G4 — Paper soak + chaos drills clean (4.5–4.6)
 - [ ] G5 — Paper campaign + go/no-go signed (4.7)  → only then live, starting at $1–2K, never $20K.
 
-Current slice: **4.6**  <!-- advanced at owner's direction 2026-07-06 ("go"); G0-G2 unsigned; open owner-gated: IBKR data (4.1), memos+KA-4 (4.4), chaos drills + soak (4.5), telegram token + live drills (4.6) -->
+Current slice: **4.7**  <!-- advanced at owner's direction 2026-07-06 ("go"); G0-G2 unsigned; open owner-gated: IBKR data (4.1), memos+KA-4 (4.4), chaos drills + soak (4.5), telegram + live drills (4.6), paper campaign itself (4.7) -->
 
 ---
 

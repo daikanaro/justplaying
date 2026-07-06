@@ -79,6 +79,14 @@ class CostModel:
         base = self._rth_ticks if is_rth(ts_utc) else self._eth_ticks
         return base * self._stress
 
+    def slippage_ticks_rth(self) -> int:
+        """Configured RTH baseline (unstressed) — for recalibration reports."""
+        return self._rth_ticks
+
+    def slippage_ticks_eth(self) -> int:
+        """Configured ETH baseline (unstressed) — for recalibration reports."""
+        return self._eth_ticks
+
     def slippage_points(self, symbol: str, ts_utc: datetime) -> float:
         return self.slippage_ticks(ts_utc) * self.spec(symbol).tick_size
 
