@@ -53,6 +53,9 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 # Magic values are fine in tests/fixtures; on the money path (src/) they must be named.
 "tests/*" = ["PLR0913", "PLR2004"]
+# Harness runners wire (log, name, params, bars, factory, costs, config, ...) explicitly;
+# collapsing them into a bag-of-args object would hide what each run depends on.
+"src/qt/validation/*" = ["PLR0913"]
 
 [tool.mypy]
 python_version = "3.12"
