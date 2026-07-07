@@ -1,0 +1,4 @@
+date,strategy,action,ticker,rank_or_signal,size_usd,entry_price,exit_price,pnl_usd,pnl_r,followed_rules_yn,emotion_note
+2026-06-30,momentum-rotation,BUY,XLK,rank 1 (12-1 = +17.9%),3333,241.87,,,,Y,"felt too high to buy — bought anyway per rules"
+2026-06-30,momentum-rotation,SKIP,XLE,rank 11 (12-1 = -12.0%),0,,,,,Y,"looks cheap, wanted to grab it — rules say no"
+2026-07-31,momentum-rotation,SELL,XLC,fell to rank 5,3333,78.10,81.40,141,,Y,"hated selling a winner"

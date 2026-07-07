@@ -86,7 +86,20 @@ or saved.
    position-sizing math, the psychology that actually breaks people, journaling, taxes, how
    the three strategies fit together (long-vol vs short-vol), minimum viable capital, and how
    *not* to fool yourself with your own backtest.
-5. **[Glossary](strategies/glossary.md)** — every technical term, defined plainly.
+5. **[Your First Paper Trade, Step by Step](strategies/05-first-paper-trade.md)** — the
+   theory-to-practice bridge: your literal first month of momentum sector rotation, with a
+   process scorecard and graduation criteria.
+6. **[Glossary](strategies/glossary.md)** — every technical term, defined plainly.
+
+### Tools
+
+- **[`tools/momentum_backtest.py`](tools/momentum_backtest.py)** — a runnable backtest of the
+  exact momentum rotation taught in Module 2 (12-1 signal, top-N, 200-day trend gate,
+  volatility targeting, costs). Run `--demo` for offline synthetic data or `--yahoo` for real
+  sector-ETF history; then re-run with `--ma 0 --vol-target 0` to *see* the drawdown roughly
+  double without the safety layers.
+- **[`tools/trade-journal-template.csv`](tools/trade-journal-template.csv)** — the journal
+  format used throughout, including the all-important `emotion_note` column.
 
 ### The universal method that applies to all three
 
