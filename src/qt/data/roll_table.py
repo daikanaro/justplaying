@@ -25,6 +25,12 @@ class RollTableError(Exception):
     """Volume data is insufficient or inconsistent for roll construction."""
 
 
+# A quarterly front is the liquid contract for ~one quarter. Crossovers seen
+# earlier than this before its expiry happen while BOTH legs are thin
+# far-from-front noise, not the §1 roll rule.
+_CROSSOVER_WINDOW_DAYS = 100
+
+
 @dataclass(frozen=True)
 class Roll:
     """Switch from ``from_contract`` to ``to_contract`` after the close of ``date``."""
@@ -83,9 +89,14 @@ def build_roll_table(
         front_v = _rolling_volume(daily_volumes[front.contract_id], volume_lookback_days)
         next_v = _rolling_volume(daily_volumes[nxt.contract_id], volume_lookback_days)
         joined = front_v.join(next_v, on="date", suffix="_next").sort("date")
-        candidates = joined.filter((pl.col("v_next") > pl.col("v")) & (pl.col("date") <= deadline))
-        if previous_roll is not None:
-            candidates = candidates.filter(pl.col("date") > previous_roll)
+        earliest = front.expiry - timedelta(days=_CROSSOVER_WINDOW_DAYS)
+        if previous_roll is not None and previous_roll > earliest:
+            earliest = previous_roll
+        candidates = joined.filter(
+            (pl.col("v_next") > pl.col("v"))
+            & (pl.col("date") <= deadline)
+            & (pl.col("date") > earliest)
+        )
         roll_date = (
             deadline if candidates.is_empty() else cast("date", candidates.get_column("date").min())
         )

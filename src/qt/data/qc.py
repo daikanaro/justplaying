@@ -20,7 +20,7 @@ from pathlib import Path
 
 import polars as pl
 
-from qt.data.sessions import expected_hourly_starts, is_holiday, trading_days
+from qt.data.sessions import expected_hourly_starts, is_holiday, trading_day, trading_days
 
 _OUTLIER_WINDOW = 100
 _OUTLIER_MIN_SAMPLES = 30
@@ -142,30 +142,32 @@ def _check_outliers(df: pl.DataFrame, report: QCReport, sigma: float) -> None:
 
 def _check_zero_volume_runs(df: pl.DataFrame, report: QCReport) -> None:
     ordered = df.sort("ts")
-    run = 0
-    run_start: datetime | None = None
-    runs: list[tuple[datetime, int]] = []
+    run_ts: list[datetime] = []
+    runs: list[list[datetime]] = []
     for ts, volume in zip(
         ordered.get_column("ts").to_list(), ordered.get_column("volume").to_list(), strict=True
     ):
         if volume == 0:
-            if run == 0:
-                run_start = ts
-            run += 1
-        else:
-            if run and run_start is not None:
-                runs.append((run_start, run))
-            run = 0
-    if run and run_start is not None:
-        runs.append((run_start, run))
-    for start_ts, length in runs:
+            run_ts.append(ts)
+        elif run_ts:
+            runs.append(run_ts)
+            run_ts = []
+    if run_ts:
+        runs.append(run_ts)
+    for run in runs:
+        # The whole run must sit on holiday sessions to stay a warning: a run
+        # that merely STARTS on a holiday and bleeds into a normal session is
+        # missing real data. Sessions via trading_day — the 17:00-CT boundary,
+        # not the UTC date.
+        sessions = {trading_day(ts) for ts in run}
         severity = (
             Severity.CRITICAL
-            if length >= _ZERO_VOLUME_CRITICAL_RUN and not is_holiday(start_ts.date())
+            if len(run) >= _ZERO_VOLUME_CRITICAL_RUN
+            and any(not is_holiday(day) for day in sessions)
             else Severity.WARNING
         )
         report.items.append(
-            QCItem(severity, "zero_volume", f"run of {length} zero-volume bars from {start_ts}")
+            QCItem(severity, "zero_volume", f"run of {len(run)} zero-volume bars from {run[0]}")
         )
 
 
@@ -211,7 +213,11 @@ def qc_hourly(df: pl.DataFrame, label: str, outlier_sigma: float) -> QCReport:
     missing_by_day: dict[date, int] = {}
     for expected in expected_hourly_starts(dates.min(), dates.max()):  # type: ignore[arg-type]
         if expected not in observed:
-            missing_by_day[expected.date()] = missing_by_day.get(expected.date(), 0) + 1
+            # Bucket by TRADING day: July 3's evening bars belong to July 4's
+            # session, so classifying them by UTC date would flag a holiday
+            # gap as a critical weekday gap (and vice versa).
+            session = trading_day(expected)
+            missing_by_day[session] = missing_by_day.get(session, 0) + 1
     for day, count in sorted(missing_by_day.items()):
         severity = Severity.WARNING if is_holiday(day) else Severity.CRITICAL
         report.items.append(

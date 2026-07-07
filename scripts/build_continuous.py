@@ -69,11 +69,15 @@ def build_symbol(
     out_dir.mkdir(parents=True, exist_ok=True)
     roll_table_frame(rolls).write_parquet(out_dir / "roll_table.parquet")
 
+    span_start = datetime(start.year, start.month, start.day, tzinfo=UTC)
     for label, bars, qc_fn in (
         ("daily", daily, qc_daily),
         ("hourly", hourly, qc_hourly),
     ):
         continuous, audit = stitch_panama(bars, rolls)
+        # The oldest contract carries bars from before the requested span;
+        # left in, they'd feed QC and every backtest a ragged prefix.
+        continuous = continuous.filter(pl.col("ts") >= span_start)
         report = qc_fn(continuous, f"{symbol} {label}", data_cfg.qc.outlier_sigma)
         reports.append(report)
         (out_dir / f"qc_{label}.txt").write_text(report.to_text() + "\n", encoding="utf-8")

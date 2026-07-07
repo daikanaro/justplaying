@@ -67,7 +67,10 @@ def contracts_covering(symbol: str, start: date, end: date) -> list[ContractMont
     candidate = ContractMonth(start.year, QUARTERLY_MONTHS[0], symbol)
     while candidate.expiry < start:
         candidate = candidate.next_quarterly()
-    horizon = end + timedelta(days=100)  # one quarter past `end` covers the live front
+    # The live contract at `end` can be the NEXT quarterly (roll fires up to
+    # ~2 weeks before the nearest expiry), whose own expiry sits up to
+    # ~14 + 98 days past `end`. 120 covers it; 100 could clip it.
+    horizon = end + timedelta(days=120)
     while candidate.expiry <= horizon:
         out.append(candidate)
         candidate = candidate.next_quarterly()

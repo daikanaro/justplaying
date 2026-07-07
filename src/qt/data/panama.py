@@ -20,8 +20,19 @@ from datetime import date
 import polars as pl
 
 from qt.data.roll_table import Roll
+from qt.data.sessions import trading_day
 
 PRICE_COLUMNS = ("open", "high", "low", "close")
+
+
+def _with_session(bars: pl.DataFrame) -> pl.DataFrame:
+    """Adds a ``session`` column: each bar's exchange TRADING day
+    (qt.data.sessions.trading_day). Hourly bars after the 17:00-CT reopen
+    belong to the NEXT session; splicing by UTC date would hand the roll
+    evening's bars to the outgoing contract."""
+    return bars.with_columns(
+        pl.col("ts").map_elements(trading_day, return_dtype=pl.Date).alias("session")
+    )
 
 
 class StitchError(Exception):
@@ -52,8 +63,8 @@ def _roll_offset(old: pl.DataFrame, new: pl.DataFrame, roll: Roll) -> float:
     """Offset new-minus-old at the last bar timestamp both contracts share on
     (or before) the roll date. Both series must overlap there — a roll date
     with no common bar is a data defect, surfaced as StitchError."""
-    old_on_date = old.filter(pl.col("ts").dt.date() <= roll.date)
-    new_on_date = new.filter(pl.col("ts").dt.date() <= roll.date)
+    old_on_date = _with_session(old).filter(pl.col("session") <= roll.date).drop("session")
+    new_on_date = _with_session(new).filter(pl.col("session") <= roll.date).drop("session")
     common = old_on_date.join(new_on_date, on="ts", suffix="_new")
     if common.is_empty():
         msg = (
@@ -88,14 +99,15 @@ def stitch_panama(
             raise StitchError(msg)
         _require_bars(bars_by_contract[cid], cid)
 
-    # Segment boundaries: contract i owns (roll[i-1].date, roll[i].date].
+    # Segment boundaries: contract i owns SESSIONS (roll[i-1].date, roll[i].date].
     segments: list[pl.DataFrame] = []
     for i, cid in enumerate(chain):
-        bars = bars_by_contract[cid].sort("ts")
+        bars = _with_session(bars_by_contract[cid].sort("ts"))
         if i > 0:
-            bars = bars.filter(pl.col("ts").dt.date() > rolls[i - 1].date)
+            bars = bars.filter(pl.col("session") > rolls[i - 1].date)
         if i < len(rolls):
-            bars = bars.filter(pl.col("ts").dt.date() <= rolls[i].date)
+            bars = bars.filter(pl.col("session") <= rolls[i].date)
+        bars = bars.drop("session")
         if bars.is_empty():
             msg = f"{cid}: no bars in its roll window"
             raise StitchError(msg)

@@ -81,6 +81,10 @@ def holiday_dates(year: int) -> frozenset[date]:
         thanksgiving + timedelta(days=1),  # early-close Friday
         _observed(date(year, 12, 25)),  # Christmas
     }
+    # Recurring CME early-close days adjacent to full holidays (when weekdays).
+    for early in (date(year, 7, 3), date(year, 12, 24)):
+        if early.weekday() < _SATURDAY:
+            days.add(early)
     return frozenset(days)
 
 
@@ -107,6 +111,23 @@ def is_open(ts_utc: datetime) -> bool:
 
 _RTH_START = time(8, 30)  # US equity cash session, exchange (Chicago) time
 _RTH_END = time(15, 0)
+
+
+def trading_day(ts_utc: datetime) -> date:
+    """The Globex TRADING day a UTC instant belongs to: sessions open at
+    17:00 Chicago the prior evening, so anything at/after 17:00 CT belongs to
+    the NEXT weekday's session. This is the date the daily loss halt, roll
+    splices, and holiday classification should key on — not the UTC date."""
+    if ts_utc.tzinfo is None:
+        msg = "trading_day requires a timezone-aware UTC datetime"
+        raise ValueError(msg)
+    local = ts_utc.astimezone(CHICAGO)
+    day = local.date()
+    if local.time() >= _HALT_END:  # evening session: belongs to tomorrow
+        day += timedelta(days=1)
+    while day.weekday() >= _SATURDAY:
+        day += timedelta(days=1)
+    return day
 
 
 def is_rth(ts_utc: datetime) -> bool:
