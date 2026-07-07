@@ -58,17 +58,21 @@ def test_per_symbol_cap_on_resulting_position(
     held = ctx(risk, instruments, positions={"MES": 2})
     assert not pretrade_check(ProposedOrder("MES", 1), held).approved
     growing = ctx(risk, instruments, positions={"MES": 1})
-    assert pretrade_check(ProposedOrder("MES", 1), growing).approved
+    assert pretrade_check(ProposedOrder("MES", 1, stop_price=4970.0), growing).approved
 
 
 def test_price_collar(risk: RiskConfig, instruments: InstrumentsConfig) -> None:
-    # 1% collar around mark 5000: 5049 passes, 5051 rejected; stops checked too.
+    # 1% collar around mark 5000: order price 5049 passes, 5051 rejected.
     context = ctx(risk, instruments)
-    assert pretrade_check(ProposedOrder("MES", 1, price=5049.0), context).approved
-    bad_price = pretrade_check(ProposedOrder("MES", 1, price=5051.0), context)
+    ok = pretrade_check(ProposedOrder("MES", 1, price=5049.0, stop_price=4980.0), context)
+    assert ok.approved
+    bad_price = pretrade_check(ProposedOrder("MES", 1, price=5051.0, stop_price=4980.0), context)
     assert not bad_price.approved
-    bad_stop = pretrade_check(ProposedOrder("MES", 1, stop_price=4900.0), context)
-    assert not bad_stop.approved  # >1% away AND fine for risk — collar still rejects
+    assert any("from last mark" in r for r in bad_price.reasons)
+    # Protective STOP triggers are exempt by design: 2.5-3 x ATR sits well
+    # outside 1% routinely; the per-trade risk check polices their size.
+    far_stop = pretrade_check(ProposedOrder("MES", 1, stop_price=4900.0), context)
+    assert far_stop.approved  # 2% away, $500 risk vs $1,000 budget
 
 
 def test_gross_notional_cap(risk: RiskConfig, instruments: InstrumentsConfig) -> None:
@@ -79,7 +83,27 @@ def test_gross_notional_cap(risk: RiskConfig, instruments: InstrumentsConfig) ->
     assert any("gross notional" in r for r in verdict.reasons)
     # Existing positions count: MES 1 held (~$25k) + M2K 6 (~$60k) vs $100k x3.
     held = ctx(risk, instruments, positions={"MES": 1})
-    assert pretrade_check(ProposedOrder("M2K", 6), held).approved
+    assert pretrade_check(ProposedOrder("M2K", 6, stop_price=1980.0), held).approved
+
+
+def test_entry_requires_declared_stop(risk: RiskConfig, instruments: InstrumentsConfig) -> None:
+    """Both §3 strategies carry an initial protective stop; a stop-less entry
+    would silently skip the per-trade risk check."""
+    verdict = pretrade_check(ProposedOrder("MES", 1), ctx(risk, instruments))
+    assert not verdict.approved
+    assert any("without a declared protective stop" in r for r in verdict.reasons)
+    # Exits carry no stop requirement — closing must never be blocked.
+    holding = ctx(risk, instruments, positions={"MES": 1})
+    assert pretrade_check(ProposedOrder("MES", -1), holding).approved
+
+
+def test_dewhitelisted_position_still_closable(
+    risk: RiskConfig, instruments: InstrumentsConfig
+) -> None:
+    """Whitelist gates ENTRIES only: a position in a symbol later removed from
+    the whitelist must stay closable."""
+    held = ctx(risk, instruments, positions={"MNQ": 1})
+    assert pretrade_check(ProposedOrder("MNQ", -1), held).approved
 
 
 def test_per_trade_risk_cap(risk: RiskConfig, instruments: InstrumentsConfig) -> None:

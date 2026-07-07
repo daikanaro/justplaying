@@ -5,6 +5,14 @@ net quantity, traded value (to the cent), and commission totals as the
 broker's statement. Any difference is reported and alerted — the §4.6
 acceptance is 'nightly report matches broker statement'.
 
+Date-bucketing caveat (documented, revisit against real Flex exports in 4.5):
+journal fills bucket by UTC calendar date; the statement's TradeDate is the
+broker's exchange-time trading day. For fills in the 17:00-19:00 CT evening
+session the two can disagree by one day — a mismatch pair (extra on one date,
+missing on the next) around the session open means bucketing skew, not lost
+fills. If real statements show this routinely, both sides must move to
+qt.data.sessions.trading_day.
+
 The parser handles the Flex 'Trades' CSV section (Symbol, Quantity,
 TradePrice, IBCommission, DateTime); fetching the Flex report itself needs
 owner credentials and stays outside this module.

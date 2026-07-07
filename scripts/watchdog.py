@@ -3,7 +3,9 @@ never inside the engine (docs/windows_ops.md).
 
 Each cycle: check the engine heartbeat (dead-man alert on stall), pull equity
 from the broker, and run the §2 daily-halt / kill logic. Requires IB Gateway
-(OWNER item §6); exits 2 with an owner-action message when unreachable.
+(OWNER item §6). When the Gateway is unreachable (it restarts daily by
+design), the watchdog alerts once and keeps retrying — a dead watchdog
+protects nothing. ``--once`` mode still exits 2 so smoke tests fail loudly.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from qt.config import RiskConfig, load_config
+from qt.data.sessions import trading_day
 from qt.oms.alerts import Alerter, LogAlerter
 from qt.risk.heartbeat import DeadManSwitch
 from qt.risk.telegram import TelegramAlerter, TelegramConfigError
@@ -33,6 +36,10 @@ def make_alerter() -> Alerter:
         return LogAlerter()
 
 
+class GatewayUnreachableError(Exception):
+    """IB Gateway did not answer this cycle (restart window, network blip)."""
+
+
 async def broker_equity_cents(host: str, port: int) -> int:
     from ib_async import IB  # noqa: PLC0415 - gateway-only path
 
@@ -40,19 +47,15 @@ async def broker_equity_cents(host: str, port: int) -> int:
     try:
         await ib.connectAsync(host, port, clientId=23, timeout=10.0)
     except (TimeoutError, OSError) as exc:
-        msg = (
-            f"cannot reach IB Gateway at {host}:{port} — OWNER ACTION (§6): "
-            "paper login + running Gateway required"
-        )
-        print(f"BLOCKED: {msg}", file=sys.stderr)
-        raise SystemExit(2) from exc
+        msg = f"cannot reach IB Gateway at {host}:{port}: {exc}"
+        raise GatewayUnreachableError(msg) from exc
     try:
         summary = await ib.accountSummaryAsync()
         for row in summary:
             if row.tag == "NetLiquidation":
                 return round(float(row.value) * 100)
-        print("BLOCKED: NetLiquidation missing from account summary", file=sys.stderr)
-        raise SystemExit(2)
+        msg = "NetLiquidation missing from account summary"
+        raise GatewayUnreachableError(msg)
     finally:
         ib.disconnect()
 
@@ -120,10 +123,26 @@ def main() -> int:
     )
     dead_man = DeadManSwitch(RUNTIME / "engine.heartbeat", alerter)
 
+    gateway_down = False
     while True:
         dead_man.check()
-        equity = asyncio.run(broker_equity_cents(args.host, args.port))
-        action = watchdog.tick(equity, datetime.now(UTC).date())
+        try:
+            equity = asyncio.run(broker_equity_cents(args.host, args.port))
+        except GatewayUnreachableError as exc:
+            # The Gateway restarts daily; a watchdog that dies with it guards
+            # nothing. Alert on the DOWN transition only, then keep retrying.
+            if not gateway_down:
+                gateway_down = True
+                alerter.alert(f"watchdog: {exc} — retrying every {args.interval:.0f}s")
+            if args.once:
+                print(f"BLOCKED: {exc}", file=sys.stderr)
+                return 2
+            time.sleep(args.interval)
+            continue
+        if gateway_down:
+            gateway_down = False
+            alerter.alert("watchdog: IB Gateway reachable again; resuming equity checks")
+        action = watchdog.tick(equity, trading_day(datetime.now(UTC)))
         if action is WatchdogAction.KILL:
             print("KILL executed; HALT flag written; watchdog exiting", file=sys.stderr)
             return 1

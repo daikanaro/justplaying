@@ -49,7 +49,10 @@ def test_quiet_day_no_action(setup) -> None:  # type: ignore[no-untyped-def]
     assert watchdog.tick(START, D0) is WatchdogAction.NONE
     assert watchdog.tick(START - 100_000, D0) is WatchdogAction.NONE  # -1%: fine
     assert broker.calls == []
-    assert alerter.messages == []
+    # The only alert is the first tick's fresh-state notice (no state file
+    # existed): the operator must confirm the HWM seed is a genuine first run.
+    assert len(alerter.messages) == 1
+    assert "initialized FRESH" in alerter.messages[0]
     assert not watchdog.daily_halted()
 
 
@@ -60,11 +63,12 @@ def test_injected_minus_3pct_day_halts_new_entries(setup) -> None:  # type: igno
     assert action is WatchdogAction.DAILY_HALT
     assert watchdog.daily_halted()  # the pre-trade choke point reads this
     assert config.daily_halt_flag.exists()
-    assert len(alerter.messages) == 1
+    halt_alerts = [m for m in alerter.messages if "DAILY HALT" in m]
+    assert len(halt_alerts) == 1
     assert broker.calls == []  # halt is entries-only: no cancel, no flatten
     # Further ticks the same day: no repeat alert, still halted.
     assert watchdog.tick(9_600_000, D0) is WatchdogAction.NONE
-    assert len(alerter.messages) == 1
+    assert len([m for m in alerter.messages if "DAILY HALT" in m]) == 1
 
 
 def test_daily_halt_expires_on_session_roll(setup) -> None:  # type: ignore[no-untyped-def]
@@ -85,7 +89,7 @@ def test_injected_minus_35pct_kills_within_one_tick(setup) -> None:  # type: ign
     # The FULL kill inside the single tick: cancel-all, flatten, HALT, alert.
     assert broker.calls == ["cancel_all", "flatten_all"]
     assert config.halt_flag.exists()
-    assert len(alerter.messages) == 1
+    assert len([m for m in alerter.messages if m.startswith("KILL:")]) == 1
     # Engine refuses restart until the OWNER clears the flag.
     with pytest.raises(HaltError, match="refuses to start"):
         require_not_halted(config.halt_flag)

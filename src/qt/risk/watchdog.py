@@ -106,15 +106,27 @@ class Watchdog:
 
     def tick(self, equity_cents: int, today: date) -> WatchdogAction:
         """One watchdog cycle. The kill path completes inside this call —
-        that is the §4.6 acceptance ('within one watchdog cycle')."""
+        that is the §4.6 acceptance ('within one watchdog cycle').
+
+        ``today`` should be the EXCHANGE trading day (qt.data.sessions
+        .trading_day), not the UTC calendar date — the daily halt must last
+        the session, not until midnight UTC."""
+        fresh = not self._config.state_path.is_file()
         state = _State.load(self._config.state_path, equity_cents, today)
+        if fresh:
+            self._alerter.alert(
+                f"watchdog state initialized FRESH: HWM seeded at current equity "
+                f"{equity_cents / 100:.2f} — any pre-existing drawdown is invisible; "
+                "verify this is a genuine first run, not a lost state file"
+            )
 
         if state.session_date != today.isoformat():  # session roll
             state.session_date = today.isoformat()
             state.day_start_equity_cents = equity_cents
-            if state.daily_halted:
-                state.daily_halted = False
-                self._config.daily_halt_flag.unlink(missing_ok=True)
+            state.daily_halted = False
+            # Unconditional: a flag orphaned by a lost state file must not
+            # outlive the session it belonged to.
+            self._config.daily_halt_flag.unlink(missing_ok=True)
 
         state.hwm_cents = max(state.hwm_cents, equity_cents)
         action = WatchdogAction.NONE
@@ -126,9 +138,18 @@ class Watchdog:
                 f"{self._risk.kill_drawdown_hwm:.2%} (equity {equity_cents / 100:.2f}, "
                 f"HWM {state.hwm_cents / 100:.2f})"
             )
-            self._broker.cancel_all()
-            self._broker.flatten_all()
+            # HALT flag FIRST: it is the backbone that keeps the engine down
+            # even if a broker action below raises. Each action is guarded so
+            # one failure cannot abort the rest of the kill.
             write_halt(self._config.halt_flag, reason)
+            for label, action_fn in (
+                ("cancel_all", self._broker.cancel_all),
+                ("flatten_all", self._broker.flatten_all),
+            ):
+                try:
+                    action_fn()
+                except Exception as exc:  # kill path must not die half-done
+                    self._alerter.alert(f"KILL: {label} FAILED: {exc} — intervene manually")
             self._alerter.alert(reason)
             action = WatchdogAction.KILL
         else:

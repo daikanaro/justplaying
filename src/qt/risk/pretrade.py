@@ -58,30 +58,45 @@ def pretrade_check(order: ProposedOrder, ctx: RiskContext) -> Verdict:  # noqa: 
     spec = ctx.instruments.instruments.get(symbol)
     mark = ctx.last_marks.get(symbol)
 
+    entry = _is_entry(order, ctx)
+
     if order.quantity == 0:
         reasons.append("zero-quantity order")
     if spec is None:
         reasons.append(f"{symbol}: no instrument spec")
-    if symbol not in ctx.risk.instrument_whitelist:
+    if entry and symbol not in ctx.risk.instrument_whitelist:
+        # Entries only: a position in a de-whitelisted symbol must stay closable.
         reasons.append(f"{symbol}: not whitelisted")
     if mark is None:
         reasons.append(f"{symbol}: no last mark for collar/notional checks")
 
-    if ctx.daily_halted and _is_entry(order, ctx):
+    if ctx.daily_halted and entry:
         reasons.append("daily loss halt active: new entries blocked (exits allowed)")
+
+    if entry and order.stop_price is None:
+        # Both strategies carry an initial protective stop (§3); an entry with
+        # no declared stop would silently skip the per-trade-risk check below.
+        reasons.append(f"{symbol}: entry without a declared protective stop")
 
     resulting = ctx.positions.get(symbol, 0) + order.quantity
     cap = ctx.risk.max_contracts.get(symbol, 0)
     if abs(resulting) > cap:
         reasons.append(f"{symbol}: resulting position {resulting} exceeds cap {cap}")
 
-    if mark is not None and mark > 0:
-        for label, price in (("price", order.price), ("stop", order.stop_price)):
-            if price is not None and abs(price - mark) / mark > ctx.risk.price_collar_pct:
-                reasons.append(
-                    f"{symbol}: {label} {price} is >{ctx.risk.price_collar_pct:.1%} "
-                    f"from last mark {mark}"
-                )
+    # Collar applies to ORDER prices only. Protective stop triggers are
+    # away-from-market by design (2.5-3 x ATR routinely exceeds 1%);
+    # collaring them would reject every plan-mandated stop. Their size is
+    # policed by the per-trade risk check instead.
+    if (
+        mark is not None
+        and mark > 0
+        and order.price is not None
+        and abs(order.price - mark) / mark > ctx.risk.price_collar_pct
+    ):
+        reasons.append(
+            f"{symbol}: price {order.price} is >{ctx.risk.price_collar_pct:.1%} "
+            f"from last mark {mark}"
+        )
 
     if spec is not None and mark is not None:
         # Gross notional across ALL positions as they would stand after the fill.
@@ -101,7 +116,7 @@ def pretrade_check(order: ProposedOrder, ctx: RiskContext) -> Verdict:  # noqa: 
                 f"{ctx.risk.gross_notional_max_x_equity}x equity ({limit_cents / 100:.2f})"
             )
 
-        if order.stop_price is not None and _is_entry(order, ctx):
+        if order.stop_price is not None and entry:
             reference = order.price if order.price is not None else mark
             risk_cents = (
                 abs(reference - order.stop_price)
