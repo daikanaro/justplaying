@@ -13,6 +13,13 @@ Interpretation note (documented, not spec'd): an opposite breakout OUTSIDE the
 entry window exits to flat (an exit is allowed 24h) but does NOT open the
 reverse position — the new entry waits for a signal inside the window.
 
+Timing note: signals are computed at a bar's CLOSE and fill at the NEXT bar's
+open (engine latency_bars=1 — this strategy assumes exactly that). The entry
+window / blackout gates are therefore evaluated at the fill instant
+(bar start + bar duration), not at the signal bar's start: gating on the
+bar-start time would let a 13:59 signal trade at 14:00 through a window that
+closed at 14:00.
+
 Sizing per §1 via qt.strategies.sizing; the daily $vol input for the
 vol-target overlay is estimated as bar-ATR * sqrt(bars_per_day) * $/point.
 """
@@ -21,7 +28,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from math import sqrt
 
 from qt.backtest.engine import StrategyContext
@@ -30,6 +37,7 @@ from qt.data.events import Event, in_blackout
 from qt.strategies.sizing import size_position
 
 _BARS_PER_DAY = {"1h": 23.0, "1d": 1.0}  # Globex trades ~23h/day
+_BAR_DURATION = {"1h": timedelta(hours=1), "1d": timedelta(days=1)}
 
 
 @dataclass
@@ -66,6 +74,7 @@ class S1TrendBreakout:
             for s in params.symbols
         }
         self._bars_per_day = _BARS_PER_DAY[params.bar_timeframe]
+        self._bar_duration = _BAR_DURATION[params.bar_timeframe]
 
     # -- gates ------------------------------------------------------------
 
@@ -131,18 +140,27 @@ class S1TrendBreakout:
         return round(price / tick) * tick
 
     def _trail(self, ctx: StrategyContext, symbol: str, state: _SymbolState, close: float) -> None:
+        """§3: the trail ratchets on FAVORABLE CLOSES only. A bar that does not
+        improve best_close never moves the stop — otherwise ATR contraction
+        alone would tighten it, which is a different (unspecified) exit rule."""
         atr = state.atr
         if atr is None:
             return
         position = ctx.position(symbol)
         current = ctx.stop_level(symbol)
         if position > 0:
+            improved = state.best_close is None or close > state.best_close
             state.best_close = max(state.best_close or close, close)
+            if current is not None and not improved:
+                return
             proposed = self._align(symbol, state.best_close - self._params.atr_stop_k * atr)
             if current is None or proposed > current:
                 ctx.set_stop(symbol, proposed)
         elif position < 0:
+            improved = state.best_close is None or close < state.best_close
             state.best_close = min(state.best_close or close, close)
+            if current is not None and not improved:
+                return
             proposed = self._align(symbol, state.best_close + self._params.atr_stop_k * atr)
             if current is None or proposed < current:
                 ctx.set_stop(symbol, proposed)
@@ -167,7 +185,9 @@ class S1TrendBreakout:
             warm = upper is not None and lower is not None and state.atr is not None
             breakout_up = warm and upper is not None and bar.close > upper
             breakout_down = warm and lower is not None and bar.close < lower
-            entry_ok = self._entry_allowed(bar.ts)
+            # Gate at the EXECUTION instant: the fill happens at the next
+            # bar's open (= this bar's start + duration; latency_bars=1).
+            entry_ok = self._entry_allowed(bar.ts + self._bar_duration)
 
             if position == 0 and state.entry_pending_since is None:
                 state.best_close = None

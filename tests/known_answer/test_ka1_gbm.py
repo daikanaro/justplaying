@@ -98,6 +98,11 @@ def _tick_walk_bar(index: int, prev: float, nxt: float) -> Bar:
 
 
 def test_ka1_first_passage_signature() -> None:
+    """Drives bare FIXED-barrier StopOrders through the ExecutionSimulator on
+    purpose: the a/(a+b) and b/a identities hold only for fixed barriers. The
+    production trailing stop would ratchet the lower barrier upward as the
+    walk rises, invalidating the theory this test checks the mechanics
+    against — so no strategy, no engine loop, just the fill path."""
     tick = 0.25
     a, b = 3, 5  # barriers: a ticks below entry, b ticks above
     p0 = 5000.0

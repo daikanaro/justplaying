@@ -90,6 +90,12 @@ class StrategyContext:
         order = self._engine.stops.get(symbol)
         return None if order is None else order.stop_price
 
+    def entry_price(self, symbol: str) -> float | None:
+        """Fill price of the OLDEST open lot (None when flat). For a
+        no-scale-in strategy this is THE entry price — what an entry-anchored
+        stop rule (S2's hard stop) must measure from."""
+        return self._engine.entry_price(symbol)
+
 
 class Strategy(Protocol):
     def on_bar(self, ctx: StrategyContext) -> dict[str, int]:
@@ -174,6 +180,12 @@ class Engine:
             raise EngineError(msg)
         return self._bars[symbol][: self.current_index + 1]
 
+    def entry_price(self, symbol: str) -> float | None:
+        position = self.portfolio.positions.get(symbol)
+        if position is None or not position.lots:
+            return None
+        return position.lots[0].entry_ticks * self._costs.spec(symbol).tick_size
+
     def set_stop(self, symbol: str, price: float) -> None:
         quantity = self.portfolio.quantity(symbol)
         pending_qty = sum(o.quantity for _, o in self._pending if o.symbol == symbol)
@@ -219,6 +231,10 @@ class Engine:
     def _intrabar_phase(self, bars_now: dict[str, Bar]) -> list[FillEvent]:
         fills: list[FillEvent] = []
         for symbol in self._symbols:
+            # A stop may have been sized against a pending flip/add (latency
+            # mode): re-sync against the LIVE position before evaluating, so a
+            # protective stop can never oppose or exceed what it protects.
+            self._sync_stop_quantity(symbol)
             stop = self.stops.get(symbol)
             if stop is None or self.portfolio.quantity(symbol) == 0:
                 continue
@@ -246,7 +262,10 @@ class Engine:
             if delta == 0:
                 continue
             event = OrderEvent(ts=signal.ts, symbol=symbol, quantity=delta, reason="target")
-            if self._config.same_close_fills:
+            # Same-close applies to fresh ENTRIES only (§3: S2's same-close mode
+            # is about the entry; exits are next-open unconditionally).
+            fresh_entry = self.portfolio.quantity(symbol) == 0 and pending_qty == 0
+            if self._config.same_close_fills and fresh_entry:
                 side = Side.BUY if delta > 0 else Side.SELL
                 order = MarketOrder(symbol=symbol, side=side, quantity=abs(delta))
                 while order.remaining > 0:
@@ -257,6 +276,9 @@ class Engine:
                     self.portfolio.apply_fill(fill)
                     fills.append(fill)
                 self._sync_stop_quantity(symbol)
+                # Re-mark at the close so the equity point reflects close marks,
+                # not the fill price (adverse slippage must show THIS bar).
+                self.portfolio.mark_to_market(signal.ts, {symbol: bars_now[symbol].close})
             else:
                 self._pending.append((index + self._config.latency_bars, event))
             current_dir = self.portfolio.quantity(symbol) + pending_qty + delta

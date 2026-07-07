@@ -60,8 +60,10 @@ def test_no_entry_outside_session_window() -> None:
 
 def test_event_blackout_blocks_entry() -> None:
     closes = [*WARMUP, 5010.0, 5010.0]
-    signal_ts = datetime(2024, 7, 8, 14, 0, tzinfo=UTC) + timedelta(hours=5)
-    result, _ = run_s1(closes, events=[Event(signal_ts, "FOMC")])
+    # The gate is evaluated at the EXECUTION instant — the next bar's open,
+    # one bar after the signal close — so the event sits there (bar 6's ts).
+    execution_ts = datetime(2024, 7, 8, 14, 0, tzinfo=UTC) + timedelta(hours=6)
+    result, _ = run_s1(closes, events=[Event(execution_ts, "FOMC")])
     assert result.fills == []
 
 

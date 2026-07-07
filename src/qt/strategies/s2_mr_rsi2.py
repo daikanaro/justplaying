@@ -8,9 +8,13 @@ Entry (long only in v1), ALL gates must pass on the signal bar's close:
 - no calendar event during the NEXT session (trading day).
 
 Exit, whichever first (next-open execution): close > previous bar's high, or
-RSI(2) > exit threshold, or the time stop. Hard stop 2.5*ATR(14) below entry,
-resting at the broker, never widened — a model-falsification line, so it is
-set once at entry and only the engine's never-widen API touches it.
+RSI(2) > exit threshold, or the time stop. Hard stop 2.5*ATR(14) below ENTRY,
+resting at the broker, never widened — a model-falsification line. Because the
+fill happens a bar after the signal, the stop is declared provisionally below
+the SIGNAL close, then lifted (never lowered) to entry - 2.5*ATR once the fill
+price is known: a gap-up fill would otherwise leave the stop too far away and
+risk more than the trade was sized for; a gap-down fill keeps the tighter
+provisional level.
 
 Scale-ins were deliberately removed (tail multiplier) — a filled position
 never increases.
@@ -27,6 +31,7 @@ from math import sqrt
 from qt.backtest.engine import StrategyContext
 from qt.config.schemas import MrRsi2Config, RiskConfig
 from qt.data.events import Event
+from qt.data.sessions import is_holiday
 from qt.strategies.sizing import size_position
 
 VixProvider = Callable[[date], float | None]
@@ -35,8 +40,10 @@ _SATURDAY = 5
 
 
 def next_trading_day(day: date) -> date:
+    """Next weekday that is not a (full or partial) holiday. Fri before a
+    Monday holiday -> Tuesday, not the closed Monday."""
     nxt = day + timedelta(days=1)
-    while nxt.weekday() >= _SATURDAY:
+    while nxt.weekday() >= _SATURDAY or is_holiday(nxt):
         nxt += timedelta(days=1)
     return nxt
 
@@ -56,6 +63,7 @@ class _SymbolState:
     bars_in_trade: int = 0
     entry_pending_since: int | None = None
     pending_stop: float | None = None
+    pending_stop_points: float | None = None  # 2.5*ATR at signal, in points
 
 
 class S2MeanReversion:
@@ -136,8 +144,11 @@ class S2MeanReversion:
         return value is not None and value < self._risk.vix_max_for_mr
 
     def _calendar_clear(self, day: date) -> bool:
+        """No event from tomorrow through the next full session INCLUSIVE.
+        The skipped days (weekends, holidays, early closes) still belong to
+        the position's first hours, so an event on any of them blocks too."""
         nxt = next_trading_day(day)
-        return not any(e.ts_utc.date() == nxt for e in self._events)
+        return not any(day < e.ts_utc.date() <= nxt for e in self._events)
 
     # -- main -------------------------------------------------------------------
 
@@ -155,8 +166,18 @@ class S2MeanReversion:
             if position > 0:
                 state.entry_pending_since = None
                 if state.pending_stop is not None and ctx.stop_level(symbol) is None:
-                    ctx.set_stop(symbol, state.pending_stop)  # resting; never widened
+                    stop = state.pending_stop
+                    entry = ctx.entry_price(symbol)
+                    if entry is not None and state.pending_stop_points is not None:
+                        # §3 anchors the stop at ENTRY. Lift the provisional
+                        # (signal-based) stop to entry-based when that is
+                        # HIGHER; the max() keeps lowering impossible.
+                        _, tick = self._specs[symbol]
+                        entry_based = round((entry - state.pending_stop_points) / tick) * tick
+                        stop = max(stop, entry_based)
+                    ctx.set_stop(symbol, stop)  # resting; never widened
                     state.pending_stop = None
+                    state.pending_stop_points = None
                 state.bars_in_trade += 1
                 exit_now = (prev_high is not None and bar.close > prev_high) or (
                     state.rsi is not None and state.rsi > self._params.rsi_exit_above
@@ -166,6 +187,7 @@ class S2MeanReversion:
                 if exit_now:
                     target = 0
                     state.pending_stop = None
+                    state.pending_stop_points = None
             else:
                 if state.entry_pending_since is not None and (
                     ctx.index > state.entry_pending_since + 1
@@ -200,7 +222,8 @@ class S2MeanReversion:
                         if size > 0:
                             target = size
                             state.entry_pending_since = ctx.index
-                            stop_raw = bar.close - self._params.hard_stop_atr_mult * state.atr
+                            state.pending_stop_points = self._params.hard_stop_atr_mult * state.atr
+                            stop_raw = bar.close - state.pending_stop_points
                             state.pending_stop = round(stop_raw / tick) * tick
             targets[symbol] = target
         return targets
