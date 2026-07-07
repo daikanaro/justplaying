@@ -1,9 +1,11 @@
 """Append-only SQLite experiment log (slice 4.3).
 
 Every backtest run appends one row: timestamp, config hash, strategy, params,
-data span, metrics. Append-only is enforced STRUCTURALLY inside the database:
-triggers abort any UPDATE or DELETE on the experiments table, so even code
-holding a raw connection cannot rewrite history. The TRUE trial count that
+data span, metrics. Triggers abort any UPDATE or DELETE on the experiments
+table, so code holding a raw connection cannot casually rewrite rows. (DDL is
+not guarded — DROP TABLE or dropping the triggers still works; the triggers
+raise the bar from "one careless statement" to "deliberate tampering", which
+is the honest limit of in-database enforcement.) The TRUE trial count that
 deflated Sharpe requires is a simple COUNT over this table.
 """
 

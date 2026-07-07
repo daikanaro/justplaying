@@ -39,7 +39,7 @@ from qt.validation.era_split import run_era_splits
 from qt.validation.experiment_log import ExperimentLog
 from qt.validation.heatmap import HeatmapData, assess_plateau, render_heatmap
 from qt.validation.mc_reshuffle import reshuffle_drawdowns
-from qt.validation.runner import run_experiment
+from qt.validation.runner import ExperimentResult, run_experiment
 from qt.validation.slippage_stress import run_slippage_stress
 from qt.validation.walk_forward import run_walk_forward
 
@@ -98,14 +98,17 @@ def battery(  # noqa: PLR0913 - top-level orchestration
     name: str,
     bars: dict[str, list[Bar]],
     factory: Any,
+    base_params: dict[str, Any],
     grid: list[dict[str, Any]],
     instruments: InstrumentsConfig,
     bars_per_year: float,
     out_dir: Path,
     engine_config: EngineConfig,
-) -> None:
+) -> ExperimentResult:
+    """Runs the battery and returns the BASELINE result. ``base_params`` is
+    the §3 default parameterisation from strategies.yaml — the headline
+    metrics must describe the system we would deploy, not grid corner [0]."""
     costs = CostModel(instruments)
-    base_params = grid[0]
     baseline = run_experiment(
         log, name, base_params, bars, factory(base_params), costs, engine_config, bars_per_year
     )
@@ -166,15 +169,30 @@ def battery(  # noqa: PLR0913 - top-level orchestration
         ],
     )
 
-    n_trials = log.trial_count()
-    sharpes = [r.metrics.get("sharpe", 0.0) for r in log.records()]
+    return baseline
+
+
+def write_deflated_sharpe(
+    log: ExperimentLog,
+    family: str,
+    baseline: ExperimentResult,
+    bars_per_year: float,
+    out_dir: Path,
+) -> None:
+    """DSR from THIS strategy family's trials only (names ``family`` or
+    ``family/...``): pooling other strategies' sharpes into the trial variance
+    deflates against selection noise that never competed with this baseline.
+    Called AFTER every family run so the trial count is the true one."""
+    records = [r for r in log.records() if r.strategy.split("/")[0] == family]
+    sharpes = [r.metrics.get("sharpe", 0.0) / (bars_per_year**0.5) for r in records]
+    n_trials = len(records)
     mean_sr = sum(sharpes) / len(sharpes)
     sr_var = sum((s - mean_sr) ** 2 for s in sharpes) / max(1, len(sharpes) - 1)
     dsr = deflated_sharpe(
         sharpe=baseline.metrics.sharpe / (bars_per_year**0.5),
         n_obs=baseline.metrics.n_bars,
         n_trials=max(2, n_trials),
-        sr_variance=max(1e-9, sr_var / bars_per_year),
+        sr_variance=max(1e-9, sr_var),
     )
     write_json(out_dir / "deflated_sharpe.json", {"true_trial_count": n_trials, "dsr": dsr})
 
@@ -207,25 +225,29 @@ def main() -> int:
     s1_research = strategies.s1_trend_breakout.research_grid
 
     def s1_factory(params: dict[str, Any]) -> Strategy:
-        merged = s1_params.model_copy(
-            update={"donchian_n": params["donchian_n"], "atr_stop_k": params["atr_stop_k"]}
-        )
-        return S1TrendBreakout(merged, risk, spec_map, events)
+        update = {
+            key: params[key] for key in ("donchian_n", "atr_stop_k", "allow_short") if key in params
+        }
+        return S1TrendBreakout(s1_params.model_copy(update=update), risk, spec_map, events)
 
+    # Baseline = the §3 defaults from strategies.yaml, NOT the grid corner.
+    s1_base = {"donchian_n": s1_params.donchian_n, "atr_stop_k": s1_params.atr_stop_k}
     s1_grid = [
         {"donchian_n": n, "atr_stop_k": k}
         for n, k in product(s1_research.donchian_n, s1_research.atr_stop_k)
     ]
+    s1_dir = REPO_ROOT / "research" / "s1_trend_breakout"
     with log:
-        battery(
+        s1_baseline = battery(
             log,
             "S1-TF-H",
             s1_bars,
             s1_factory,
+            s1_base,
             s1_grid,
             instruments,
             HOURLY_BARS_PER_YEAR,
-            REPO_ROOT / "research" / "s1_trend_breakout",
+            s1_dir,
             EngineConfig(CASH),
         )
         # S1 heatmap over the full research grid, sharpe per cell.
@@ -252,13 +274,32 @@ def main() -> int:
             list(s1_research.atr_stop_k),
             cells,
         )
-        render_heatmap(
-            heatmap, "S1 TF-H sharpe", REPO_ROOT / "research" / "s1_trend_breakout" / "heatmap.png"
+        render_heatmap(heatmap, "S1 TF-H sharpe", s1_dir / "heatmap.png")
+        write_json(s1_dir / "plateau.json", {"assessment": str(assess_plateau(heatmap))})
+
+        # §3: the equity-index short-side on/off comparison, as a tracked
+        # experiment (index drift penalizes shorts — memo must show both).
+        long_only_params = {**s1_base, "allow_short": False}
+        long_only = run_experiment(
+            log,
+            "S1-TF-H/short-side-off",
+            long_only_params,
+            s1_bars,
+            s1_factory(long_only_params),
+            CostModel(instruments),
+            EngineConfig(CASH),
+            HOURLY_BARS_PER_YEAR,
         )
         write_json(
-            REPO_ROOT / "research" / "s1_trend_breakout" / "plateau.json",
-            {"assessment": str(assess_plateau(heatmap))},
+            s1_dir / "short_side.json",
+            {
+                "short_on_baseline": s1_baseline.metrics.as_dict(),
+                "short_off": long_only.metrics.as_dict(),
+            },
         )
+        # DSR last: by now every S1 family trial (grid, wf, eras, stress,
+        # short-side) is in the log, so the trial count is the true one.
+        write_deflated_sharpe(log, "S1-TF-H", s1_baseline, HOURLY_BARS_PER_YEAR, s1_dir)
 
         def s2_factory(params: dict[str, Any]) -> Strategy:
             return S2MeanReversion(strategies.s2_mr_rsi2, risk, spec_map, vix_by_date.get, events)
@@ -268,17 +309,20 @@ def main() -> int:
             ("next_open", EngineConfig(CASH)),
             ("same_close_LOOKAHEAD", EngineConfig(CASH, same_close_fills=True)),
         ):
-            battery(
+            s2_dir = REPO_ROOT / "research" / "s2_mr_rsi2" / mode
+            s2_baseline = battery(
                 log,
                 f"S2-{mode}",
                 s2_bars,
                 s2_factory,
+                {},
                 s2_grid,
                 instruments,
                 DAILY_BARS_PER_YEAR,
-                REPO_ROOT / "research" / "s2_mr_rsi2" / mode,
+                s2_dir,
                 engine_config,
             )
+            write_deflated_sharpe(log, f"S2-{mode}", s2_baseline, DAILY_BARS_PER_YEAR, s2_dir)
         # §3: the WORSE of the two fill modes governs all decisions.
         modes = {}
         for mode in ("next_open", "same_close_LOOKAHEAD"):

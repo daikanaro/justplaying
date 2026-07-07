@@ -86,14 +86,21 @@ def _in_week(ts_utc: str, start: date, end: date) -> bool:
     return start <= day <= end
 
 
-def _round_trip_count(fills: list[FillRecord]) -> int:
-    position = 0
+def _round_trip_count(fills: list[FillRecord], week_start: date, week_end: date) -> int:
+    """Round trips CLOSED during the week, tracked per symbol. All fills (in
+    journal order) feed the running positions so a trade opened before the
+    week still counts when it closes inside it; netting MES against M2K
+    would invent or hide trips."""
+    positions: dict[str, int] = {}
     trips = 0
     for fill in fills:
         signed = fill.quantity if fill.side == "buy" else -fill.quantity
-        before = position
-        position += signed
-        if before != 0 and (position == 0 or before * position < 0):
+        before = positions.get(fill.symbol, 0)
+        after = before + signed
+        positions[fill.symbol] = after
+        if not _in_week(fill.ts_utc, week_start, week_end):
+            continue
+        if before != 0 and (after == 0 or before * after < 0):
             trips += 1
     return trips
 
@@ -130,7 +137,7 @@ def build_weekly_report(  # noqa: PLR0913 - the report consumes exactly these so
     week_fills = [f for f in fills if _in_week(f.ts_utc, week_start, week_end)]
     week_snapshots = [s for s in snapshots if week_start <= s.day <= week_end]
     week_statement = [t for t in statement_trades if week_start <= t.trade_date <= week_end]
-    trips = _round_trip_count(week_fills)
+    trips = _round_trip_count(fills, week_start, week_end)
     checks: list[BandCheck] = []
 
     # 1. slippage vs modeled, +/-1 tick

@@ -1,19 +1,25 @@
 """The campaign clock (§4.7 acceptance): >= 4 CONSECUTIVE weekly reports
 inside all bands. An out-of-band week resets the clock — diagnose, fix,
-restart. State persists as JSON so the clock survives restarts; weeks are
-append-only (recording an older or duplicate week is an error, not a rewrite).
+restart. So does a calendar gap between recorded weeks: an unreported week is
+an unmonitored week, not an in-band one. State persists as JSON so the clock
+survives restarts; weeks are append-only (recording an older or duplicate
+week is an error, not a rewrite).
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from qt.campaign.weekly import WeeklyReport
 
 REQUIRED_CONSECUTIVE_WEEKS = 4
+
+# Largest seam between one week's end and the next week's start that still
+# counts as consecutive: 1 day for Mon..Sun windows, 3 for Mon..Fri.
+_MAX_WEEK_SEAM = timedelta(days=3)
 
 
 class CampaignError(Exception):
@@ -57,10 +63,15 @@ class CampaignTracker:
 
     def status(self) -> CampaignStatus:
         consecutive = 0
+        next_start: date | None = None
         for week in reversed(self._weeks):
             if not week["inside_all_bands"]:
                 break
+            week_end = date.fromisoformat(str(week["week_end"]))
+            if next_start is not None and next_start - week_end > _MAX_WEEK_SEAM:
+                break  # calendar gap: the streak cannot span an unmonitored week
             consecutive += 1
+            next_start = date.fromisoformat(str(week["week_start"]))
         last = self._weeks[-1]["week_end"] if self._weeks else None
         return CampaignStatus(
             consecutive_in_band=consecutive,

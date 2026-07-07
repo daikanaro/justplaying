@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from itertools import pairwise
 
 _MIN_CURVE_LEN = 3
@@ -38,7 +38,11 @@ def sharpe_ratio(equity_cents: list[int], bars_per_year: float) -> float:
     """Annualized Sharpe of per-bar simple returns on the equity curve."""
     if len(equity_cents) < _MIN_CURVE_LEN or bars_per_year <= 0:
         return 0.0
-    returns = [(b - a) / a for a, b in pairwise(equity_cents) if a > 0]
+    if min(equity_cents) <= 0:
+        # A curve that touches zero has no meaningful simple returns; silently
+        # dropping those pairs would hide exactly the catastrophic bars.
+        return 0.0
+    returns = [(b - a) / a for a, b in pairwise(equity_cents)]
     if len(returns) < _MIN_RETURNS:
         return 0.0
     mean = sum(returns) / len(returns)
@@ -67,6 +71,18 @@ def es95_cents(trades: list[int]) -> float:
     return sum(tail) / len(tail)
 
 
+def worst_day_cents(equity_curve: list[tuple[datetime, int]]) -> float:
+    """Worst UTC-calendar-day equity change: each day's LAST mark vs the prior
+    day's. Per-bar diffs on hourly data would report the worst hour instead —
+    a much smaller number wearing a 'day' label."""
+    closes: dict[date, int] = {}
+    for ts, equity in equity_curve:
+        closes[ts.date()] = equity  # curve is chronological; last mark wins
+    daily = [closes[d] for d in sorted(closes)]
+    moves = [b - a for a, b in pairwise(daily)]
+    return float(min(moves)) if moves else 0.0
+
+
 def max_losing_cluster(trades: list[int]) -> int:
     longest = current = 0
     for trade in trades:
@@ -83,7 +99,6 @@ def compute_metrics(
     equity = [e for _, e in equity_curve]
     initial = equity[0] if equity else 0
     final = equity[-1] if equity else 0
-    day_moves = [b - a for a, b in pairwise(equity)]
     wins = sum(1 for t in trades if t > 0)
     return Metrics(
         n_bars=len(equity),
@@ -95,6 +110,6 @@ def compute_metrics(
         mean_trade_cents=(sum(trades) / len(trades)) if trades else 0.0,
         es95_cents=es95_cents(trades),
         worst_trade_cents=float(min(trades)) if trades else 0.0,
-        worst_day_cents=float(min(day_moves)) if day_moves else 0.0,
+        worst_day_cents=worst_day_cents(equity_curve),
         max_losing_cluster=max_losing_cluster(trades),
     )
