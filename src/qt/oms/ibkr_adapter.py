@@ -93,9 +93,13 @@ class IbkrOms:
             )
             raise GatewayUnavailableError(msg) from exc
         self._ib = ib
-        broker_positions = {
-            p.contract.symbol: int(p.position) for p in ib.positions() if p.position
-        }
+        # SUM per root symbol: two contract months of the same root must
+        # aggregate, not overwrite each other (dict-comprehension last-wins).
+        broker_positions: dict[str, int] = {}
+        for p in ib.positions():
+            if p.position:
+                symbol = p.contract.symbol
+                broker_positions[symbol] = broker_positions.get(symbol, 0) + int(p.position)
         # Mismatch writes HALT + alerts + raises; we must not catch it.
         full_reconciliation(self._journal, broker_positions, self._halt_path, self._alerter)
 

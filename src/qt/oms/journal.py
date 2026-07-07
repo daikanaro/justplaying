@@ -57,10 +57,24 @@ class OrderJournal:
     def _append(self, record: dict[str, Any]) -> None:
         record = {"ts_utc": datetime.now(UTC).isoformat(timespec="milliseconds"), **record}
         line = json.dumps(record, sort_keys=True, default=str)
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
+        with self._path.open("a+b") as raw:
+            # A crash mid-write leaves a tail without a newline. Appending
+            # after it would MERGE two records into one corrupt MID-FILE line
+            # (fatal on every future replay). Refuse instead: replay() reports
+            # the truncated tail, reconciliation halts on it, and the operator
+            # resolves it BEFORE the journal accepts new records.
+            raw.seek(0, os.SEEK_END)
+            if raw.tell() > 0:
+                raw.seek(-1, os.SEEK_END)
+                if raw.read(1) != b"\n":
+                    msg = (
+                        f"{self._path}: crash-truncated tail present — reconcile and "
+                        "resolve before journaling new orders"
+                    )
+                    raise JournalError(msg)
+            raw.write(line.encode("utf-8") + b"\n")
+            raw.flush()
+            os.fsync(raw.fileno())
 
     def record_intent(  # noqa: PLR0913 - one journal field per order attribute
         self,
@@ -96,6 +110,11 @@ class OrderJournal:
         fill_price: float | None = None,
         note: str = "",
     ) -> None:
+        if fill_quantity and fill_price is None:
+            # An unpriced fill would count toward replay() positions while
+            # being invisible to fills() — two readers, two answers. Refuse.
+            msg = f"{client_order_id}: fill of {fill_quantity} requires fill_price"
+            raise JournalError(msg)
         self._append(
             {
                 "kind": "transition",

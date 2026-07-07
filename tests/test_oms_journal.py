@@ -43,6 +43,26 @@ def test_crash_truncated_tail_tolerated_and_flagged(tmp_path: Path) -> None:
     assert "QT-1" in replay.orders
 
 
+def test_append_refused_while_crash_tail_present(tmp_path: Path) -> None:
+    """Appending after a truncated tail would merge two records into one
+    corrupt MID-FILE line (fatal forever); the journal must refuse instead."""
+    j = journal(tmp_path)
+    j.record_intent("QT-1", "MES", "buy", 1, "market")
+    with j.path.open("a", encoding="utf-8") as fh:
+        fh.write('{"kind": "transition", "client_or')  # crash mid-write
+    with pytest.raises(JournalError, match="crash-truncated tail"):
+        j.record_intent("QT-2", "MES", "buy", 1, "market")
+
+
+def test_fill_without_price_refused_at_write(tmp_path: Path) -> None:
+    """An unpriced fill would count toward replay() positions while being
+    invisible to fills() — two readers, two answers."""
+    j = journal(tmp_path)
+    j.record_intent("QT-1", "MES", "buy", 1, "market")
+    with pytest.raises(JournalError, match="requires fill_price"):
+        j.record_transition("QT-1", OrderState.FILLED, fill_quantity=1)
+
+
 def test_corrupt_middle_line_is_fatal(tmp_path: Path) -> None:
     j = journal(tmp_path)
     j.record_intent("QT-1", "MES", "buy", 1, "market")
@@ -71,7 +91,7 @@ def test_transition_for_unknown_order_is_fatal(tmp_path: Path) -> None:
 def test_illegal_journaled_sequence_is_fatal(tmp_path: Path) -> None:
     j = journal(tmp_path)
     j.record_intent("QT-1", "MES", "buy", 1, "market")
-    j.record_transition("QT-1", OrderState.FILLED, fill_quantity=1)
+    j.record_transition("QT-1", OrderState.FILLED, fill_quantity=1, fill_price=5000.25)
     j.record_transition("QT-1", OrderState.ACKED)  # after terminal: impossible
     with pytest.raises(JournalError, match="illegal transition"):
         j.replay()

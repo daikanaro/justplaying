@@ -45,6 +45,26 @@ class NativeStopManager:
     def current(self, symbol: str) -> NativeStop | None:
         return self._stops.get(symbol)
 
+    def rehydrate(self, stops: list[NativeStop]) -> None:
+        """Seed from the broker's open stop orders on (re)connect. MUST be
+        called before the first upsert after a restart — GTC stops survive
+        both engine restarts and the Gateway's daily restart, and an
+        unrehydrated manager would place a duplicate live stop."""
+        if self._stops:
+            msg = "rehydrate() must run on a fresh manager, before any upsert"
+            raise ValueError(msg)
+        symbols = [s.symbol for s in stops]
+        if len(set(symbols)) != len(symbols):
+            msg = f"broker reports multiple stops per symbol: {sorted(symbols)} — resolve manually"
+            raise ValueError(msg)
+        self._stops = {s.symbol: s for s in stops}
+
+    def on_stop_fill(self, symbol: str) -> None:
+        """The broker reported the resting stop filled: forget it WITHOUT
+        cancelling (it no longer exists broker-side). Not calling this leaves
+        a stale entry that blocks the next trade's legitimate stop."""
+        self._stops.pop(symbol, None)
+
     def upsert(self, symbol: str, side: StopSide, quantity: int, price: float) -> NativeStop:
         """Create the stop, or ratchet/resize it. Raises on any widening."""
         if quantity < 1 or price <= 0.0:

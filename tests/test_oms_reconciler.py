@@ -44,7 +44,9 @@ def _journal_with_position(tmp_path: Path, symbol: str, quantity: int) -> OrderJ
     journal = OrderJournal(tmp_path / "orders.jsonl")
     side = "buy" if quantity > 0 else "sell"
     journal.record_intent("QT-1", symbol, side, abs(quantity), "market")
-    journal.record_transition("QT-1", OrderState.FILLED, fill_quantity=abs(quantity))
+    journal.record_transition(
+        "QT-1", OrderState.FILLED, fill_quantity=abs(quantity), fill_price=5000.25
+    )
     return journal
 
 
@@ -76,6 +78,18 @@ def test_truncated_journal_tail_halts(tmp_path: Path) -> None:
     halt = tmp_path / "HALT"
     with pytest.raises(HaltError, match="crash-truncated"):
         full_reconciliation(journal, {"MES": 2}, halt, LogAlerter())
+    assert halt.exists()
+
+
+def test_order_stuck_in_pending_new_halts(tmp_path: Path) -> None:
+    """An intent that never progressed past PENDING_NEW is a crash between
+    intent and ack — the order may or may not be live at the broker, which is
+    exactly the unexplained state reconciliation must refuse to trade on."""
+    journal = OrderJournal(tmp_path / "orders.jsonl")
+    journal.record_intent("QT-1", "MES", "buy", 1, "market")
+    halt = tmp_path / "HALT"
+    with pytest.raises(HaltError, match="never progressed past"):
+        full_reconciliation(journal, {}, halt, LogAlerter())
     assert halt.exists()
 
 

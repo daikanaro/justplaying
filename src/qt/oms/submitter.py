@@ -37,6 +37,11 @@ class OrderIntent:
     quantity: int
     order_type: OrderType = OrderType.MARKET
     stop_price: float | None = None
+    # Decision-time price (e.g. the signal close): journaled so the §4.7
+    # weekly slippage band can measure fills against it. Deliberately NOT part
+    # of the client-order-id hash — the same decision resent with a refreshed
+    # mark must still deduplicate.
+    reference_price: float | None = None
 
     def __post_init__(self) -> None:
         if self.side not in ("buy", "sell"):
@@ -69,6 +74,12 @@ class SubmitOutcome(StrEnum):
     PLACED = "placed"
     DUPLICATE_SUPPRESSED = "duplicate_suppressed"
     GAVE_UP = "gave_up"
+    # The id is journaled but the order never progressed past PENDING_NEW: a
+    # crash hit between record_intent and placement (or between placement and
+    # the ACK journal write). Whether it reached the broker is UNKNOWABLE from
+    # here — do not silently suppress, do not blindly re-place; reconcile
+    # against broker open orders first.
+    UNRESOLVED_PENDING = "unresolved_pending"
 
 
 class PlacementError(Exception):
@@ -103,7 +114,15 @@ class OrderSubmitter:
 
     def submit(self, intent: OrderIntent) -> SubmitOutcome:
         order_id = intent.client_order_id
-        if order_id in self._journal.known_ids():
+        existing = self._journal.replay().orders.get(order_id)
+        if existing is not None:
+            if existing.state is OrderState.PENDING_NEW:
+                self._alerter.alert(
+                    f"order {order_id} ({intent.decision_id}) is journaled but never "
+                    "progressed past PENDING_NEW — crash between intent and ack; "
+                    "reconcile against broker open orders before acting"
+                )
+                return SubmitOutcome.UNRESOLVED_PENDING
             self._alerter.alert(f"duplicate submit suppressed: {order_id} ({intent.decision_id})")
             return SubmitOutcome.DUPLICATE_SUPPRESSED
         self._journal.record_intent(
@@ -113,6 +132,7 @@ class OrderSubmitter:
             intent.quantity,
             intent.order_type.value,
             intent.stop_price,
+            intent.reference_price,
         )
         delays = backoff_delays(self._backoff_base_s, self._max_attempts)
         for attempt, delay in enumerate(delays, start=1):

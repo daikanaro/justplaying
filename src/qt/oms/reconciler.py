@@ -75,6 +75,12 @@ def full_reconciliation(
     if replay.truncated_tail:
         problems.append("journal has a crash-truncated final record")
     problems.extend(
+        f"order {order_id} ({record.symbol}) journaled but never progressed past "
+        "PENDING_NEW — crash between intent and ack; resolve against broker open orders"
+        for order_id, record in replay.orders.items()
+        if record.state.value == "PENDING_NEW"
+    )
+    problems.extend(
         f"{m.symbol}: journal says {m.journal_quantity}, broker says {m.broker_quantity}"
         for m in position_mismatches(replay.positions, broker_positions)
     )
