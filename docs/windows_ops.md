@@ -58,10 +58,10 @@ treat it as an incident: halt new entries until resynced.
 | Job | Schedule | Command (from repo root) | Notes |
 |---|---|---|---|
 | Clock resync | daily 06:00 local | `w32tm /resync` | run as SYSTEM, highest privileges |
-| Engine start | at logon + daily after Gateway restart | `uv run python -m qt.engine` (4.5) | restart-on-failure: 3 retries, 1 min apart |
-| Watchdog | at logon, restart every 5 min if dead | `uv run python -m qt.watchdog` (4.6) | separate process, never same job as engine |
-| Nightly reconciliation | daily 22:30 local | `uv run python -m qt.recon` (4.6) | vs IBKR Flex report |
-| Weekly tracking report | Mon 07:00 local | `uv run python -m qt.reports.weekly` (4.7) | paper-campaign bands |
+| Engine start | at logon + daily after Gateway restart | _no entry point yet — the live engine loop is not part of Phase 4; register this job when it lands_ | restart-on-failure: 3 retries, 1 min apart |
+| Watchdog | at logon, restart every 5 min if dead | `uv run python scripts/watchdog.py` (4.6) | separate process, never same job as engine |
+| Nightly reconciliation | daily 22:30 local | `uv run python scripts/nightly_recon.py --statement <flex_trades.csv>` (4.6) | vs IBKR Flex report (owner downloads the CSV) |
+| Weekly tracking report | Mon 07:00 local | `uv run python scripts/weekly_report.py --week-start <prev Monday> --statement <flex_trades.csv>` (4.7) | paper-campaign bands |
 | RTT re-baseline | monthly | `uv run python scripts/measure_rtt.py --note "production baseline"` | keep history |
 
 Task Scheduler settings for every job: "Run whether user is logged on or not", "Run with

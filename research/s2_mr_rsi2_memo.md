@@ -17,7 +17,9 @@ of downtrends where "oversold" keeps getting more oversold; the hard
 overreaction); the 5-bar time stop kills the trade when the snap-back thesis
 has expired; the ATR/VIX/event gates refuse regimes where the tail dominates.
 KA-3 already demonstrates on synthetic P = F + u worlds that these governors
-are roughly mean-neutral while cutting ES95 ~5.6x and the worst trade ~14x.
+are roughly mean-neutral while cutting ES95 ~6.3x and the worst trade ~15x
+(all-on vs all-off across the KA-3 seeds; reproduce via
+tests/known_answer/test_ka3_mr_governors.py::run_config).
 NO scale-ins — deliberately removed as a tail multiplier.
 
 ## 2. Configuration under review
@@ -55,8 +57,9 @@ Sharpe improves.
 
 - Crash regimes faster than the hard stop (gap-through risk is modeled but
   still real money).
-- VIX gate uses the prior close: a same-day vol spike is invisible until the
-  next bar.
+- VIX gate reads the signal day's close (live: a snapshot ~5 min before it):
+  a spike in the final minutes, or overnight before the next-open fill, is
+  invisible to the gate.
 - Live implementation computes the signal ~5 min before the close; slippage
   vs the true close must be logged and reconciled against the same-close
   backtest mode (§3).
